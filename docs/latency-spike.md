@@ -105,7 +105,10 @@ CSV.
 ## Known limitations
 
 - **Speed unit:** the unit of `DriveState.speed` / `speed_float` is not documented upstream.
-  MPH is assumed. Confirm it during a drive.
+  MPH is assumed and converted to km/h for display and for the CSV `speed_kmh` column. All
+  displayed values use SI-based units (km/h, km, °C, kPa, kW). Confirm the speed unit during
+  a drive by comparing with the car's own display: if the app reads about 1.6 times too high,
+  the vehicle reports km/h.
 - **Sleeping car:** waking infotainment through VCSEC is not implemented. If the car is
   asleep, the handshake fails.
 - **No session reuse:** session state is not cached across app restarts, so every connect

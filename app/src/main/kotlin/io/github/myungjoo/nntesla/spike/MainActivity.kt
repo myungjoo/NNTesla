@@ -146,7 +146,7 @@ private fun SpeedPanel(vm: SpikeViewModel) {
     val slow by vm.slow.collectAsStateWithLifecycle()
     val sample = fast
     Text(
-        text = sample?.speed?.let { "%.1f".format(it) } ?: "--",
+        text = sample?.speedKmh?.let { "%.1f".format(it) } ?: "--",
         fontSize = 96.sp,
         fontWeight = FontWeight.Bold,
         fontFamily = FontFamily.Monospace,
@@ -157,23 +157,26 @@ private fun SpeedPanel(vm: SpikeViewModel) {
         },
     )
     Text(
-        "raw speed (unit assumed ${sample?.speedUnit ?: "-"}) · shift ${sample?.shiftState ?: "-"} · " +
-            "power ${sample?.powerKw ?: "-"} · vehicle ts ${sample?.vehicleTimestampMillis ?: "-"}",
+        "km/h · shift ${sample?.shiftState ?: "-"} · " +
+            "power ${sample?.powerKw?.let { "$it kW" } ?: "-"} · vehicle ts ${sample?.vehicleTimestampMillis ?: "-"}",
         style = MaterialTheme.typography.bodySmall,
     )
     Text(
-        "battery ${slow.batteryLevelPercent.show()}% · range ${slow.batteryRangeMiles.show()} · " +
-            "in ${slow.insideTempCelsius.show()}°C · out ${slow.outsideTempCelsius.show()}°C",
+        "battery ${slow.batteryLevelPercent.show()} % · range ${slow.batteryRangeKm.show("%.0f")} km · " +
+            "in ${slow.insideTempCelsius.show("%.1f")} °C · out ${slow.outsideTempCelsius.show("%.1f")} °C",
         style = MaterialTheme.typography.bodySmall,
     )
     Text(
-        "tires ${slow.tirePressureBar?.value?.joinToString("/") { it?.let { v -> "%.2f".format(v) } ?: "-" } ?: "-"} · " +
-            "dest ${slow.destination.show()} (${slow.minutesToArrival.show()} min)",
+        "tires ${slow.tirePressureKpa?.value?.joinToString(" / ") { it?.let { v -> "%.0f".format(v) } ?: "-" } ?: "-"} kPa · " +
+            "dest ${slow.destination.show()} (${slow.minutesToArrival.show("%.0f")} min)",
         style = MaterialTheme.typography.bodySmall,
     )
 }
 
-private fun <T> Timed<T>?.show(): String = this?.value?.toString() ?: "-"
+private fun <T> Timed<T>?.show(format: String? = null): String {
+    val v = this?.value ?: return "-"
+    return if (format != null && v is Number) format.format(v) else v.toString()
+}
 
 @Composable
 private fun ReportPanel(vm: SpikeViewModel) {

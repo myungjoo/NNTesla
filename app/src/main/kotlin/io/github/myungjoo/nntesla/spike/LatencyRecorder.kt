@@ -151,7 +151,7 @@ class LatencyRecorder(private val frameNanos: Long) {
         file.bufferedWriter().use { w ->
             w.write(
                 "kind,categories,send_ns,written_ns,first_rx_ns,complete_ns,decoded_ns,display_ns," +
-                    "request_bytes,response_bytes,outcome,speed,shift,vehicle_ts_ms,latency_bound_ms\n",
+                    "request_bytes,response_bytes,outcome,speed_kmh,shift,vehicle_ts_ms,latency_bound_ms\n",
             )
             for (r in rows) {
                 val res = r.result
@@ -164,7 +164,7 @@ class LatencyRecorder(private val frameNanos: Long) {
                     listOf(
                         r.kind, res.categories.sorted().joinToString("+"), res.sendNanos, res.writtenNanos,
                         res.firstRxNanos, res.completeNanos, res.decodedNanos, r.displayNanos,
-                        res.requestBytes, res.responseBytes, outcome, r.fast?.speed ?: "", r.fast?.shiftState ?: "",
+                        res.requestBytes, res.responseBytes, outcome, r.fast?.speedKmh ?: "", r.fast?.shiftState ?: "",
                         r.fast?.vehicleTimestampMillis ?: "",
                         if (r.latencyBoundNanos > 0) "%.2f".format(r.latencyBoundNanos / 1e6) else "",
                     ).joinToString(",") + "\n",

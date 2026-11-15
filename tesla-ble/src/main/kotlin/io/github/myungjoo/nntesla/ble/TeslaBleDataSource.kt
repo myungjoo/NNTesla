@@ -4,7 +4,6 @@ import com.tesla.generated.carserver.vehicle.Vehicle
 import io.github.myungjoo.nntesla.vehicledata.FastState
 import io.github.myungjoo.nntesla.vehicledata.ShiftState
 import io.github.myungjoo.nntesla.vehicledata.SlowState
-import io.github.myungjoo.nntesla.vehicledata.SpeedUnit
 import io.github.myungjoo.nntesla.vehicledata.Timed
 import io.github.myungjoo.nntesla.vehicledata.VehicleDataSource
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -26,13 +25,13 @@ class TeslaBleDataSource : VehicleDataSource {
         if (data.hasDriveState()) {
             val drive = data.driveState
             val state = FastState(
-                speed = when {
-                    drive.hasSpeedFloat() -> drive.speedFloat
-                    drive.hasSpeed() -> drive.speed.toFloat()
+                // The vehicle's unit is not documented upstream; mph is assumed (see
+                // docs/ble-data-inventory.md) and must be confirmed against the car's display.
+                speedKmh = when {
+                    drive.hasSpeedFloat() -> drive.speedFloat * KM_PER_MILE
+                    drive.hasSpeed() -> drive.speed.toFloat() * KM_PER_MILE
                     else -> null
                 },
-                // Unit is not documented upstream; MPH is assumed and must be confirmed in the spike.
-                speedUnit = SpeedUnit.MPH,
                 shiftState = when (drive.shiftState.typeCase) {
                     Vehicle.ShiftState.TypeCase.P -> ShiftState.P
                     Vehicle.ShiftState.TypeCase.R -> ShiftState.R
@@ -63,7 +62,7 @@ class TeslaBleDataSource : VehicleDataSource {
             val c = data.chargeState
             s = s.copy(
                 batteryLevelPercent = Timed(if (c.hasBatteryLevel()) c.batteryLevel else null, t),
-                batteryRangeMiles = Timed(if (c.hasBatteryRange()) c.batteryRange else null, t),
+                batteryRangeKm = Timed(if (c.hasBatteryRange()) c.batteryRange * KM_PER_MILE else null, t),
             )
         }
         if (data.hasClimateState()) {
@@ -76,12 +75,13 @@ class TeslaBleDataSource : VehicleDataSource {
         if (data.hasTirePressureState()) {
             val p = data.tirePressureState
             s = s.copy(
-                tirePressureBar = Timed(
+                // The proto reports bar.
+                tirePressureKpa = Timed(
                     listOf(
-                        if (p.hasTpmsPressureFl()) p.tpmsPressureFl else null,
-                        if (p.hasTpmsPressureFr()) p.tpmsPressureFr else null,
-                        if (p.hasTpmsPressureRl()) p.tpmsPressureRl else null,
-                        if (p.hasTpmsPressureRr()) p.tpmsPressureRr else null,
+                        if (p.hasTpmsPressureFl()) p.tpmsPressureFl * KPA_PER_BAR else null,
+                        if (p.hasTpmsPressureFr()) p.tpmsPressureFr * KPA_PER_BAR else null,
+                        if (p.hasTpmsPressureRl()) p.tpmsPressureRl * KPA_PER_BAR else null,
+                        if (p.hasTpmsPressureRr()) p.tpmsPressureRr * KPA_PER_BAR else null,
                     ),
                     t,
                 ),
@@ -96,5 +96,10 @@ class TeslaBleDataSource : VehicleDataSource {
             )
         }
         return s
+    }
+
+    private companion object {
+        const val KM_PER_MILE = 1.609344f
+        const val KPA_PER_BAR = 100f
     }
 }
