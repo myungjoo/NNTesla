@@ -3,12 +3,15 @@ package io.github.myungjoo.nntesla.spike
 import android.os.Bundle
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -19,14 +22,21 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -43,7 +53,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
@@ -82,29 +94,38 @@ class MainActivity : ComponentActivity() {
 /** Share of the screen (height in portrait, width in landscape) given to the speed. */
 private const val SPEED_FRACTION = 0.45f
 
-/** Narrowest a secondary section may get before the panel drops to fewer columns. */
+/** Narrowest a tools section may get before the tools screen drops to fewer columns. */
 private val MIN_SECTION_WIDTH = 300.dp
+
+/** Narrowest a driving-info tile may get before the drive panel drops to fewer columns. */
+private val MIN_TILE_WIDTH = 150.dp
 private val GAP = 8.dp
 
 /**
- * The speed always gets [SPEED_FRACTION] of the window, on the long axis: top band in portrait,
- * left band in landscape. Everything else lives in [SecondaryPanel], which reflows its sections
- * into as many columns as the remaining space allows.
+ * 기본 화면은 주행 중 필요한 정보만 보여 준다. 속도는 언제나 창의 [SPEED_FRACTION]을 긴 축으로 차지한다
+ * (세로 모드는 위쪽 띠, 가로 모드는 왼쪽 띠). 나머지는 [DrivePanel]이다. 연결 관리·페어링·측정 같은
+ * 도구는 설정 버튼을 눌러야 [ToolsScreen]으로 나온다.
  */
 @Composable
 private fun SpikeScreen(vm: SpikeViewModel) {
+    var showTools by rememberSaveable { mutableStateOf(false) }
+    if (showTools) {
+        BackHandler { showTools = false }
+        ToolsScreen(vm, onClose = { showTools = false })
+        return
+    }
     BoxWithConstraints(Modifier.fillMaxSize()) {
         if (maxWidth > maxHeight) {
             Row(Modifier.fillMaxSize()) {
                 SpeedPanel(vm, Modifier.fillMaxHeight().fillMaxWidth(SPEED_FRACTION))
                 VerticalDivider()
-                SecondaryPanel(vm, Modifier.fillMaxHeight().weight(1f))
+                DrivePanel(vm, onOpenTools = { showTools = true }, Modifier.fillMaxHeight().weight(1f))
             }
         } else {
             Column(Modifier.fillMaxSize()) {
                 SpeedPanel(vm, Modifier.fillMaxWidth().fillMaxHeight(SPEED_FRACTION))
                 HorizontalDivider()
-                SecondaryPanel(vm, Modifier.fillMaxWidth().weight(1f))
+                DrivePanel(vm, onOpenTools = { showTools = true }, Modifier.fillMaxWidth().weight(1f))
             }
         }
     }
@@ -139,27 +160,113 @@ private fun SpeedPanel(vm: SpikeViewModel, modifier: Modifier) {
 }
 
 /**
- * Non-speed UI as independent sections. The column count follows the available width, so the
- * same sections stack in one column on a phone in portrait and spread out on wider windows.
+ * 속도 밖의 주행 정보. 위쪽 줄에 연결 상태와 설정 버튼, 그 아래에 정보 타일을 둔다. 타일 열 수는 남은
+ * 폭을 따라가므로, 세로 모드 폰에서는 2~3열, 가로 모드나 펼친 폴드에서는 더 많은 열로 퍼진다.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun SecondaryPanel(vm: SpikeViewModel, modifier: Modifier) {
-    BoxWithConstraints(modifier) {
-        val inner = maxWidth - GAP * 2
-        val columns = ((inner + GAP) / (MIN_SECTION_WIDTH + GAP)).toInt().coerceAtLeast(1)
-        val sectionWidth = (inner - GAP * (columns - 1)) / columns
-        val section = Modifier.width(sectionWidth)
-        FlowRow(
-            modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(GAP),
-            horizontalArrangement = Arrangement.spacedBy(GAP),
-            verticalArrangement = Arrangement.spacedBy(GAP),
-        ) {
-            Section("Vehicle", section) { VehicleDataSection(vm) }
-            Section("Connection", section) { ConnectionSection(vm) }
-            Section("Pairing", section) { PairingSection(vm) }
-            Section("Experiment", section) { ExperimentSection(vm) }
-            Section("Report", section) { ReportSection(vm) }
+private fun DrivePanel(vm: SpikeViewModel, onOpenTools: () -> Unit, modifier: Modifier) {
+    val fast by vm.fast.collectAsStateWithLifecycle()
+    val slow by vm.slow.collectAsStateWithLifecycle()
+    val status by vm.status.collectAsStateWithLifecycle()
+    Column(modifier.padding(horizontal = GAP)) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            ConnectionBadge(status.first, Modifier.weight(1f))
+            IconButton(onClick = onOpenTools) { Icon(Icons.Filled.Settings, contentDescription = "Settings") }
+        }
+        BoxWithConstraints(Modifier.fillMaxWidth().weight(1f)) {
+            val columns = ((maxWidth + GAP) / (MIN_TILE_WIDTH + GAP)).toInt().coerceAtLeast(1)
+            val tileWidth = (maxWidth - GAP * (columns - 1)) / columns
+            val tile = Modifier.width(tileWidth)
+            FlowRow(
+                modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = GAP),
+                horizontalArrangement = Arrangement.spacedBy(GAP),
+                verticalArrangement = Arrangement.spacedBy(GAP),
+            ) {
+                InfoTile("Battery", slow.batteryLevelPercent.show(), "%", tile)
+                InfoTile("Range", slow.batteryRangeKm.show("%.0f"), "km", tile)
+                InfoTile("Power", fast?.powerKw?.toString() ?: "-", "kW", tile)
+                InfoTile("Outside", slow.outsideTempCelsius.show("%.1f"), "°C", tile)
+                InfoTile("Inside", slow.insideTempCelsius.show("%.1f"), "°C", tile)
+                TireTile(slow.tirePressureKpa?.value, tile)
+                val destination = slow.destination?.value
+                if (!destination.isNullOrEmpty()) {
+                    InfoTile(destination, slow.minutesToArrival.show("%.0f"), "min", tile)
+                }
+            }
+        }
+    }
+}
+
+/** 연결 상태를 색 점과 짧은 문구로. 자세한 내용은 설정 화면에 있다. */
+@Composable
+private fun ConnectionBadge(state: TeslaVehicleClient.State, modifier: Modifier) {
+    val (color, label) = when (state) {
+        TeslaVehicleClient.State.READY -> Color(0xFF4CAF50) to "Connected"
+        TeslaVehicleClient.State.SCANNING,
+        TeslaVehicleClient.State.CONNECTING,
+        TeslaVehicleClient.State.HANDSHAKING -> Color(0xFFFFC107) to "Connecting"
+        TeslaVehicleClient.State.NEEDS_PAIRING -> Color(0xFFFF9800) to "Pairing needed"
+        TeslaVehicleClient.State.FAILED -> Color(0xFFF44336) to "Disconnected"
+        TeslaVehicleClient.State.IDLE -> Color.Gray to "Not connected"
+    }
+    Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Box(Modifier.size(10.dp).clip(CircleShape).background(color))
+        Text(label, style = MaterialTheme.typography.bodyMedium)
+    }
+}
+
+@Composable
+private fun InfoTile(label: String, value: String, unit: String, modifier: Modifier) {
+    Card(modifier) {
+        Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+            Text(label, style = MaterialTheme.typography.labelMedium, maxLines = 1)
+            Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(value, fontSize = 32.sp, lineHeight = 34.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                Text(unit, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(bottom = 4.dp))
+            }
+        }
+    }
+}
+
+/** 타이어 공기압 네 개를 차 모양대로 앞 두 개, 뒤 두 개로. */
+@Composable
+private fun TireTile(kpa: List<Float?>?, modifier: Modifier) {
+    fun v(i: Int) = kpa?.getOrNull(i)?.let { "%.0f".format(it) } ?: "-"
+    Card(modifier) {
+        Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+            Text("Tires (kPa)", style = MaterialTheme.typography.labelMedium, maxLines = 1)
+            Text("${v(0)}  ${v(1)}", fontSize = 20.sp, lineHeight = 24.sp, fontWeight = FontWeight.SemiBold)
+            Text("${v(2)}  ${v(3)}", fontSize = 20.sp, lineHeight = 24.sp, fontWeight = FontWeight.SemiBold)
+        }
+    }
+}
+
+/** 연결 관리, 페어링, 지연 측정 같은 도구. 섹션 열 수는 폭을 따라간다. 측정은 이 화면을 닫아도 계속된다. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ToolsScreen(vm: SpikeViewModel, onClose: () -> Unit) {
+    Column(Modifier.fillMaxSize()) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = GAP), verticalAlignment = Alignment.CenterVertically) {
+            Text("Settings", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+            IconButton(onClick = onClose) { Icon(Icons.Filled.Close, contentDescription = "Close") }
+        }
+        BoxWithConstraints(Modifier.fillMaxWidth().weight(1f)) {
+            val inner = maxWidth - GAP * 2
+            val columns = ((inner + GAP) / (MIN_SECTION_WIDTH + GAP)).toInt().coerceAtLeast(1)
+            val sectionWidth = (inner - GAP * (columns - 1)) / columns
+            val section = Modifier.width(sectionWidth)
+            FlowRow(
+                modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(GAP),
+                horizontalArrangement = Arrangement.spacedBy(GAP),
+                verticalArrangement = Arrangement.spacedBy(GAP),
+            ) {
+                Section("Connection", section) { ConnectionSection(vm) }
+                Section("Pairing", section) { PairingSection(vm) }
+                Section("Vehicle data (raw)", section) { VehicleDataSection(vm) }
+                Section("Experiment", section) { ExperimentSection(vm) }
+                Section("Report", section) { ReportSection(vm) }
+            }
         }
     }
 }
