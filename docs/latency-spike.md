@@ -86,7 +86,9 @@ CSV.
 
 1. Build with `./gradlew :app:assembleDebug` and install
    `app/build/outputs/apk/debug/app-debug.apk`. Android 12 (API 31) or later is required.
-2. Grant the Nearby devices permission.
+2. 근처 기기 권한과 위치 권한(정확한 위치)을 허용하고, 기기의 위치 서비스를 켠다. Tesla 차량은
+   iBeacon 형식으로 광고하는데, Android는 위치 권한 없이 스캔하는 앱(`neverForLocation`)에는
+   iBeacon 광고를 전달하지 않는다.
 3. Enter the VIN and tap **Connect**. The car must be awake: during a drive, or with the
    touchscreen on.
 4. If the status shows `NEEDS_PAIRING`:

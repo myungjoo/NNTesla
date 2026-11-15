@@ -83,10 +83,7 @@ class SpikeViewModel(app: Application) : AndroidViewModel(app) {
         if (client == null && _vin.value.length == 17 && hasBlePermissions()) connect()
     }
 
-    private fun hasBlePermissions(): Boolean = listOf(
-        Manifest.permission.BLUETOOTH_SCAN,
-        Manifest.permission.BLUETOOTH_CONNECT,
-    ).all { ContextCompat.checkSelfPermission(getApplication(), it) == PackageManager.PERMISSION_GRANTED }
+    private fun hasBlePermissions(): Boolean = REQUIRED_PERMISSIONS.all { ContextCompat.checkSelfPermission(getApplication(), it) == PackageManager.PERMISSION_GRANTED }
 
     fun connect() {
         val v = _vin.value
@@ -95,7 +92,7 @@ class SpikeViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         if (!hasBlePermissions()) {
-            _message.value = "Nearby devices permission is required"
+            _message.value = "Nearby devices and location permissions are required"
             return
         }
         _message.value = ""
@@ -201,5 +198,15 @@ class SpikeViewModel(app: Application) : AndroidViewModel(app) {
 
     override fun onCleared() {
         disconnect()
+    }
+
+    companion object {
+        /** 차량 스캔·연결에 필요한 런타임 권한. 위치 권한이 필요한 이유는 tesla-ble 매니페스트 참고. */
+        val REQUIRED_PERMISSIONS = arrayOf(
+            Manifest.permission.BLUETOOTH_SCAN,
+            Manifest.permission.BLUETOOTH_CONNECT,
+            Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.ACCESS_COARSE_LOCATION,
+        )
     }
 }

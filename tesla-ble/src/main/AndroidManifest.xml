@@ -3,8 +3,14 @@
 
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="true" />
 
-    <uses-permission
-        android:name="android.permission.BLUETOOTH_SCAN"
-        android:usesPermissionFlags="neverForLocation" />
+    <!--
+        neverForLocation을 쓰면 안 된다. 그 플래그를 붙이면 Android가 iBeacon 형식 광고를 스캔
+        결과에서 걸러 내는데, Tesla 차량은 iBeacon으로 광고하므로 차량이 아예 발견되지 않는다.
+        대신 위치 권한을 받고, 기기의 위치 서비스도 켜져 있어야 한다. BLE 스캔 결과에는 정확한 위치
+        권한이 필요하다. Android 12부터는 COARSE를 함께 요청해야 FINE을 요청할 수 있다.
+    -->
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
 </manifest>
