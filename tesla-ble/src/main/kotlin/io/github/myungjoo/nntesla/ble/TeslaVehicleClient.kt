@@ -113,9 +113,10 @@ class TeslaVehicleClient(
         handler.removeCallbacks(pairingPoll)
         stopScan()
         link.close()
-        failAllPending("stopped")
+        // 대기 중인 콜백(스케줄러)이 곧바로 재요청하므로, 상태를 먼저 내려 READY가 아님을 보이게 한다.
         session = null
         setState(State.IDLE, "stopped")
+        failAllPending("stopped")
     }
 
     /** Retries the infotainment handshake (e.g. after the key was paired). */
@@ -148,8 +149,8 @@ class TeslaVehicleClient(
         // The link may still be up (e.g. handshake failed); start from a clean slate.
         stopScan()
         link.close()
-        failAllPending("reconnecting")
         session = null
+        failAllPending("reconnecting")
         scan()
     }
 
@@ -168,7 +169,7 @@ class TeslaVehicleClient(
     fun requestState(categories: Set<StateCategory>, timeoutMillis: Long, callback: (Result) -> Unit) {
         val s = session
         val sendNanos = System.nanoTime()
-        if (state != State.READY || s == null) {
+        if (state != State.READY || s == null || !link.isReady) {
             callback(Result(categories, sendNanos, 0, 0, 0, 0, 0, 0, Outcome.Failed("not ready")))
             return
         }
@@ -386,9 +387,11 @@ class TeslaVehicleClient(
         }
 
         override fun onLinkClosed(reason: String) {
-            failAllPending(reason)
+            // 상태를 먼저 FAILED로 바꾼 뒤 대기 요청을 실패 처리한다. 순서가 반대면 콜백이
+            // 아직 READY인 클라이언트에 재요청해, 이미 닫힌 링크에서 예외가 난다.
             session = null
             setState(State.FAILED, reason)
+            failAllPending(reason)
         }
     }
 

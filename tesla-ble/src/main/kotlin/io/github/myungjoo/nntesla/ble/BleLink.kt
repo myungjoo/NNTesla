@@ -48,6 +48,9 @@ internal class BleLink(
     private var firstChunkNanos = 0L
     private var ready = false
 
+    /** RX 구독까지 끝나 [send]를 호출할 수 있는 상태. */
+    val isReady: Boolean get() = ready
+
     fun connect(device: BluetoothDevice) {
         check(gatt == null) { "already connected" }
         gatt = device.connectGatt(context, false, callback, BluetoothDevice.TRANSPORT_LE, BluetoothDevice.PHY_LE_1M_MASK, handler)
