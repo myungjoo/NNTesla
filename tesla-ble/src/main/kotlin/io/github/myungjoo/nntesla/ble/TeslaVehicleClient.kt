@@ -112,6 +112,7 @@ class TeslaVehicleClient(
         handler.removeCallbacks(reconnect)
         handler.removeCallbacks(pairingPoll)
         stopScan()
+        cancelLinkTimers()
         link.close()
         // 대기 중인 콜백(스케줄러)이 곧바로 재요청하므로, 상태를 먼저 내려 READY가 아님을 보이게 한다.
         session = null
@@ -148,6 +149,7 @@ class TeslaVehicleClient(
         if (!autoReconnect || state != State.FAILED) return@Runnable
         // The link may still be up (e.g. handshake failed); start from a clean slate.
         stopScan()
+        cancelLinkTimers()
         link.close()
         session = null
         failAllPending("reconnecting")
@@ -232,6 +234,25 @@ class TeslaVehicleClient(
         }
         setState(State.CONNECTING, "connecting to ${result.device.address}")
         link.connect(result.device)
+        handler.postDelayed(connectTimeout, CONNECT_TIMEOUT_MS)
+    }
+
+    /**
+     * GATT 연결 뒤 MTU 협상, 서비스 탐색, RX 구독 중 어느 콜백이든 오지 않으면 CONNECTING에서 영원히
+     * 멈춘다. 일정 시간 안에 링크가 준비되지 않으면 끊고 FAILED로 보내 자동 재연결에 맡긴다.
+     */
+    private val connectTimeout = Runnable {
+        if (state != State.CONNECTING) return@Runnable
+        link.close()
+        session = null
+        setState(State.FAILED, "BLE connection setup timed out")
+    }
+
+    /** 이전 링크에 묶인 타이머를 정리한다. 남겨 두면 다음 연결에서 엉뚱한 시점에 발화한다. */
+    private fun cancelLinkTimers() {
+        handler.removeCallbacks(connectTimeout)
+        handler.removeCallbacks(handshakeTimeout)
+        handshakeUuid = null
     }
 
     private fun stopScan() {
@@ -252,6 +273,8 @@ class TeslaVehicleClient(
         handshakeUuid = uuid
         setState(State.HANDSHAKING, "handshake attempt $handshakeAttempts")
         link.send(Messages.sessionInfoRequest(Domain.DOMAIN_INFOTAINMENT, key.publicKeyBytes, routingAddress, uuid).toByteArray())
+        // 시도마다 타이머는 하나만 둔다(재시도·페어링 폴링이 겹쳐도 시도 횟수가 두 배로 소모되지 않게).
+        handler.removeCallbacks(handshakeTimeout)
         handler.postDelayed(handshakeTimeout, HANDSHAKE_TIMEOUT_MS)
     }
 
@@ -377,6 +400,7 @@ class TeslaVehicleClient(
 
     private inner class LinkListener : BleLink.Listener {
         override fun onLinkReady(mtu: Int) {
+            handler.removeCallbacks(connectTimeout)
             this@TeslaVehicleClient.mtu = mtu
             handshakeAttempts = 0
             startHandshake()
@@ -389,6 +413,7 @@ class TeslaVehicleClient(
         override fun onLinkClosed(reason: String) {
             // 상태를 먼저 FAILED로 바꾼 뒤 대기 요청을 실패 처리한다. 순서가 반대면 콜백이
             // 아직 READY인 클라이언트에 재요청해, 이미 닫힌 링크에서 예외가 난다.
+            cancelLinkTimers()
             session = null
             setState(State.FAILED, reason)
             failAllPending(reason)
@@ -397,6 +422,7 @@ class TeslaVehicleClient(
 
     companion object {
         private const val SCAN_TIMEOUT_MS = 20_000L
+        private const val CONNECT_TIMEOUT_MS = 10_000L
         private const val HANDSHAKE_TIMEOUT_MS = 1_500L
         private const val MAX_HANDSHAKE_ATTEMPTS = 5
         private val RECONNECT_BACKOFF_MS = longArrayOf(1_000, 2_000, 5_000, 10_000, 30_000)
