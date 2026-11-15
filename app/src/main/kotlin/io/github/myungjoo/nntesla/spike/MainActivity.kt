@@ -166,7 +166,19 @@ private fun SpeedPanel(vm: SpikeViewModel, modifier: Modifier) {
             )
             Text("km/h  ${sample?.shiftState ?: "-"}", fontSize = unitSize, lineHeight = unitSize)
         }
+        // 경고등은 판넬 아래쪽에 겹쳐 그린다. 속도 숫자의 크기·위치 계산에는 들어가지 않는다.
+        SpeedTelltales(vm, Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(maxHeight * TELLTALE_FRACTION))
     }
+}
+
+/** 속도 판넬 높이 중 경고등 줄이 차지하는 비율(10% 이내). */
+private const val TELLTALE_FRACTION = 0.08f
+
+/** 도어·창문·잠금 경고등. 느린 경로 값만 읽어, 속도 숫자는 이 값이 바뀌어도 다시 그려지지 않는다. */
+@Composable
+private fun SpeedTelltales(vm: SpikeViewModel, modifier: Modifier) {
+    val slow by vm.slow.collectAsStateWithLifecycle()
+    TelltaleRow(slow.closures?.value, modifier)
 }
 
 /** 주행 정보 타일 하나. 값은 [TileGrid]가 정한 크기로 그린다. */
