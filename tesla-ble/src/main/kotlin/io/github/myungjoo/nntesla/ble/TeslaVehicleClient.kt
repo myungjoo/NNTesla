@@ -10,6 +10,7 @@ import android.content.Context
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.Process
+import android.util.Log
 import com.tesla.generated.carserver.server.CarServer
 import com.tesla.generated.carserver.vehicle.Vehicle.VehicleData
 import com.tesla.generated.keys.Keys
@@ -395,6 +396,8 @@ class TeslaVehicleClient(
             }
             else -> Unit
         }
+        // 현장(차량 옆)에서 연결 실패를 adb logcat으로 진단할 수 있게 상태 전이를 남긴다.
+        Log.i(TAG, "$newState: $shown")
         listener.onStateChanged(newState, shown)
     }
 
@@ -421,6 +424,7 @@ class TeslaVehicleClient(
     }
 
     companion object {
+        private const val TAG = "NNTesla.BLE"
         private const val SCAN_TIMEOUT_MS = 20_000L
         private const val CONNECT_TIMEOUT_MS = 10_000L
         private const val HANDSHAKE_TIMEOUT_MS = 1_500L
