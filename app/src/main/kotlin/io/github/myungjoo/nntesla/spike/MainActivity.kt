@@ -64,6 +64,9 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.tesla.generated.keys.Keys
 import io.github.myungjoo.nntesla.ble.PollingScheduler
@@ -80,6 +83,12 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        // 계기판이라 화면 전체를 쓴다. 접은 Fold의 가로 모드는 높이가 440dp 남짓이라 시스템 바가 차지하는
+        // 높이도 아깝다. 가장자리에서 쓸어 넘기면 잠시 다시 보인다.
+        WindowCompat.getInsetsController(window, window.decorView).apply {
+            systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            hide(WindowInsetsCompat.Type.systemBars())
+        }
         permissions.launch(SpikeViewModel.REQUIRED_PERMISSIONS)
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
