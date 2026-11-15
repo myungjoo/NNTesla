@@ -48,6 +48,12 @@ internal class BleLink(
     private var firstChunkNanos = 0L
     private var ready = false
 
+    // 다른 앱(Tesla 앱 등)이 이미 차량과 링크를 잡고 있으면 연결 직후 스택이 MTU 콜백을 스스로 한 번
+    // 보내고, 우리 requestMtu 응답이 한 번 더 온다. 콜백마다 다음 단계를 시작하면 서비스 탐색과 CCCD
+    // 쓰기가 겹쳐 두 번째 쓰기가 "prior command is not finished"로 거부된다. 단계마다 한 번만 진행한다.
+    private var discoveryStarted = false
+    private var subscribeStarted = false
+
     /** RX 구독까지 끝나 [send]를 호출할 수 있는 상태. */
     val isReady: Boolean get() = ready
 
@@ -73,6 +79,8 @@ internal class BleLink(
         val g = gatt ?: return
         gatt = null
         ready = false
+        discoveryStarted = false
+        subscribeStarted = false
         writeQueue.clear()
         writeInFlight = null
         g.disconnect()
@@ -99,6 +107,12 @@ internal class BleLink(
         if (!ok) fail("GATT write could not be started")
     }
 
+    private fun startDiscovery(g: BluetoothGatt) {
+        if (discoveryStarted) return
+        discoveryStarted = true
+        if (!g.discoverServices()) fail("service discovery could not be started")
+    }
+
     private fun fail(reason: String) {
         close()
         listener.onLinkClosed(reason)
@@ -117,7 +131,7 @@ internal class BleLink(
         override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
             if (newState == BluetoothProfile.STATE_CONNECTED && status == BluetoothGatt.GATT_SUCCESS) {
                 g.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH)
-                if (!g.requestMtu(MAX_MTU)) g.discoverServices()
+                if (!g.requestMtu(MAX_MTU)) startDiscovery(g)
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED || status != BluetoothGatt.GATT_SUCCESS) {
                 if (gatt != null) fail("disconnected (status=$status)")
             }
@@ -126,10 +140,12 @@ internal class BleLink(
         override fun onMtuChanged(g: BluetoothGatt, newMtu: Int, status: Int) {
             if (status == BluetoothGatt.GATT_SUCCESS) mtu = newMtu
             blockLength = minOf(mtu, MAX_MESSAGE_CHUNK) - ATT_HEADER
-            g.discoverServices()
+            startDiscovery(g)
         }
 
         override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
+            if (subscribeStarted || gatt == null) return
+            subscribeStarted = true
             val service = g.getService(UUID.fromString(BleFraming.SERVICE_UUID))
             tx = service?.getCharacteristic(UUID.fromString(BleFraming.TO_VEHICLE_UUID))
             rx = service?.getCharacteristic(UUID.fromString(BleFraming.FROM_VEHICLE_UUID))
@@ -149,18 +165,19 @@ internal class BleLink(
             } else {
                 BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
             }
-            val ok = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                g.writeDescriptor(cccd, enable) == BluetoothStatusCodes.SUCCESS
+            val result = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                g.writeDescriptor(cccd, enable)
             } else {
                 @Suppress("DEPRECATION")
                 cccd.value = enable
                 @Suppress("DEPRECATION")
-                g.writeDescriptor(cccd)
+                if (g.writeDescriptor(cccd)) BluetoothStatusCodes.SUCCESS else BluetoothStatusCodes.ERROR_UNKNOWN
             }
-            if (!ok) fail("could not subscribe to RX")
+            if (result != BluetoothStatusCodes.SUCCESS) fail("could not subscribe to RX (status=$result)")
         }
 
         override fun onDescriptorWrite(g: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
+            if (ready || gatt == null) return
             if (status != BluetoothGatt.GATT_SUCCESS) {
                 fail("RX subscription failed (status=$status)")
                 return
