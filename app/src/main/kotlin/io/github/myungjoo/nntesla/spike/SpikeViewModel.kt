@@ -60,6 +60,8 @@ class SpikeViewModel(app: Application) : AndroidViewModel(app) {
     val fast: StateFlow<FastState?> = dataSource.fast
     val slow: StateFlow<SlowState> = dataSource.slow
 
+    // 메인 스레드에서 바꾸고 BLE 스레드의 리스너에서 읽는다.
+    @Volatile
     private var client: TeslaVehicleClient? = null
     private var scheduler: PollingScheduler? = null
     private var runConfig: PollingScheduler.Config? = null
@@ -96,13 +98,25 @@ class SpikeViewModel(app: Application) : AndroidViewModel(app) {
             _message.value = "Nearby devices permission is required"
             return
         }
+        _message.value = ""
+        // 이전 클라이언트에 묶인 스케줄러를 먼저 멈춘다. 측정 중이면 새 클라이언트가 READY가 될 때 다시 시작한다.
+        if (scheduler != null) {
+            scheduler?.stop()
+            scheduler = null
+            recorder.markGap()
+        }
         client?.shutdown()
-        client = TeslaVehicleClient(getApplication(), v, key, object : TeslaVehicleClient.Listener {
+        lateinit var created: TeslaVehicleClient
+        created = TeslaVehicleClient(getApplication(), v, key, object : TeslaVehicleClient.Listener {
             override fun onStateChanged(state: TeslaVehicleClient.State, detail: String) {
+                // 교체되거나 끊긴 클라이언트가 늦게 보내는 이벤트(예: shutdown 후 "stopped")는 무시한다.
+                if (client !== created) return
                 _status.value = state to detail
-                viewModelScope.launch(Dispatchers.Main) { onClientState(state) }
+                viewModelScope.launch(Dispatchers.Main) { if (client === created) onClientState(state) }
             }
-        }).also { it.start(autoReconnect = true) }
+        })
+        client = created
+        created.start(autoReconnect = true)
     }
 
     /** Main thread. Pauses polling while the link is down and resumes it once READY again. */
