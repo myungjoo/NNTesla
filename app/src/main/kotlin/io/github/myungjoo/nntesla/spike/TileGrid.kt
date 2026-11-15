@@ -24,6 +24,12 @@ object TileGrid {
     const val INLINE_HEIGHT_RATIO = 0.7f
     const val INLINE_WIDTH_RATIO = 0.21f
 
+    /**
+     * 두 값을 한 칸에 합치는 기준. 합친 배치의 글자가 이 배수 이상 커질 때만 합친다(조금 커지는 정도면
+     * 따로 두는 편이 읽기 쉽다). 예: 접은 Fold 가로는 약 15% 커져 합치고, 편 Fold 가로는 2%라 따로 둔다.
+     */
+    const val MERGE_GAIN = 1.1f
+
     /** 타일 좌우 안쪽 여백(한쪽). */
     const val TILE_PADDING = 12f
 

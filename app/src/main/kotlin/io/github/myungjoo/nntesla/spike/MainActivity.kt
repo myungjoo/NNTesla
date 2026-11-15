@@ -173,12 +173,18 @@ private fun SpeedPanel(vm: SpikeViewModel, modifier: Modifier) {
 private sealed interface DriveTile {
     data class Value(val label: String, val value: String, val unit: String) : DriveTile
     data class Tires(val kpa: List<Float?>?) : DriveTile
+
+    /** 한 칸에 두 값(예: 실외·실내 온도)을 위아래로. */
+    data class Pair(val label1: String, val value1: String, val label2: String, val value2: String, val unit: String) : DriveTile
 }
 
 /**
  * 속도 밖의 주행 정보. 위쪽 줄에 연결 상태와 설정 버튼, 그 아래를 타일이 빈칸 없이 채운다. 배터리와 주행 가능
  * 거리는 위쪽 영역에 나머지보다 2.5~3배 큰 글자로, 나머지는 아래쪽 영역에 둔다. 두 영역의 높이, 열 수, 글자
  * 크기는 [TileGrid.split]이 남은 영역에 맞춰 고른다. 마지막 줄이 덜 차면 그 줄 타일이 넓어진다.
+ *
+ * 내비게이션 칸은 경로가 없어도 자리를 지킨다(경로가 생길 때 배치가 바뀌지 않게). 칸이 모자라면
+ * ([TileGrid.MERGE_GAIN] 이상 글자가 커지면) 실외·실내 온도를 한 칸에 위아래로 합친다.
  */
 @Composable
 private fun DrivePanel(vm: SpikeViewModel, onOpenTools: () -> Unit, modifier: Modifier) {
@@ -189,13 +195,24 @@ private fun DrivePanel(vm: SpikeViewModel, onOpenTools: () -> Unit, modifier: Mo
         DriveTile.Value("Battery", slow.batteryLevelPercent.show(), "%"),
         DriveTile.Value("Range", slow.batteryRangeKm.show("%.0f"), "km"),
     )
-    val secondary = buildList {
+    val outside = slow.outsideTempCelsius.show("%.0f")
+    val inside = slow.insideTempCelsius.show("%.0f")
+    val destination = slow.destination?.value
+    val navigation = if (destination.isNullOrEmpty()) {
+        DriveTile.Value("No route", "-", "min")
+    } else {
+        DriveTile.Value(destination, slow.minutesToArrival.show("%.0f"), "min")
+    }
+    fun secondary(mergeTemps: Boolean) = buildList {
         add(DriveTile.Value("Power", fast?.powerKw?.toString() ?: "-", "kW"))
-        add(DriveTile.Value("Outside", slow.outsideTempCelsius.show("%.0f"), "°C"))
-        add(DriveTile.Value("Inside", slow.insideTempCelsius.show("%.0f"), "°C"))
+        if (mergeTemps) {
+            add(DriveTile.Pair("Outside", outside, "Inside", inside, "°C"))
+        } else {
+            add(DriveTile.Value("Outside", outside, "°C"))
+            add(DriveTile.Value("Inside", inside, "°C"))
+        }
         add(DriveTile.Tires(slow.tirePressureKpa?.value))
-        val destination = slow.destination?.value
-        if (!destination.isNullOrEmpty()) add(DriveTile.Value(destination, slow.minutesToArrival.show("%.0f"), "min"))
+        add(navigation)
     }
     Column(modifier.padding(horizontal = GAP)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -203,7 +220,13 @@ private fun DrivePanel(vm: SpikeViewModel, onOpenTools: () -> Unit, modifier: Mo
             IconButton(onClick = onOpenTools) { Icon(Icons.Filled.Settings, contentDescription = "Settings") }
         }
         BoxWithConstraints(Modifier.fillMaxWidth().weight(1f).padding(bottom = GAP)) {
-            val split = TileGrid.split(primary.size, secondary.size, maxWidth.value, maxHeight.value, GAP.value)
+            val separate = secondary(mergeTemps = false)
+            val merged = secondary(mergeTemps = true)
+            val splitSeparate = TileGrid.split(primary.size, separate.size, maxWidth.value, maxHeight.value, GAP.value)
+            val splitMerged = TileGrid.split(primary.size, merged.size, maxWidth.value, maxHeight.value, GAP.value)
+            val mergeTemps = splitMerged.secondary.valueSize >= splitSeparate.secondary.valueSize * TileGrid.MERGE_GAIN
+            val secondary = if (mergeTemps) merged else separate
+            val split = if (mergeTemps) splitMerged else splitSeparate
             val density = LocalDensity.current
             Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(GAP)) {
                 TileBlock(
@@ -236,6 +259,7 @@ private fun TileBlock(tiles: List<DriveTile>, columns: Int, valueSize: TextUnit,
                     when (tile) {
                         is DriveTile.Value -> if (inline) InlineTile(tile, valueSize, m) else InfoTile(tile, valueSize, m)
                         is DriveTile.Tires -> TireTile(tile.kpa, valueSize, m)
+                        is DriveTile.Pair -> PairTile(tile, valueSize, m)
                     }
                 }
             }
@@ -310,6 +334,29 @@ private fun InlineTile(tile: DriveTile.Value, valueSize: TextUnit, modifier: Mod
             )
             Text(tile.value, fontSize = valueSize, lineHeight = valueSize, fontWeight = FontWeight.SemiBold, maxLines = 1)
             Text(" " + tile.unit, fontSize = (valueSize * 0.4f).atLeast(MIN_LABEL_SP), maxLines = 1)
+        }
+    }
+}
+
+/** 두 값을 위아래로. 왼쪽에 라벨 두 개, 오른쪽에 값 두 개(줄마다 값 글자의 55%), 끝에 공통 단위. */
+@Composable
+private fun PairTile(tile: DriveTile.Pair, valueSize: TextUnit, modifier: Modifier) {
+    val size = valueSize * 0.55f
+    val label = (valueSize * 0.4f).atLeast(MIN_LABEL_SP)
+    Card(modifier) {
+        Row(
+            Modifier.fillMaxSize().padding(horizontal = TileGrid.TILE_PADDING.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(tile.label1, fontSize = label, lineHeight = size, maxLines = 1)
+                Text(tile.label2, fontSize = label, lineHeight = size, maxLines = 1)
+            }
+            Column(horizontalAlignment = Alignment.End) {
+                Text(tile.value1, fontSize = size, lineHeight = size, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                Text(tile.value2, fontSize = size, lineHeight = size, fontWeight = FontWeight.SemiBold, maxLines = 1)
+            }
+            Text(" " + tile.unit, fontSize = label, maxLines = 1)
         }
     }
 }
