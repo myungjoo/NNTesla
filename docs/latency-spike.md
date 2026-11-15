@@ -26,10 +26,13 @@ The spike app (`:app`, package `io.github.myungjoo.nntesla.spike`) does the foll
 6. Runs the polling scheduler (`PollingScheduler`):
    - **Fast path**: sends `GetVehicleData{drive}`. As soon as a request slot frees, the next
      request is sent (closed loop, no fixed interval).
-   - **Slow path**: requests charge, climate and tire pressure, each every 2.5 s. Their due
+   - **Slow path**: requests charge, climate, tire pressure, closures(도어·창문·잠금), location
+     (진행 방향), media(재생 중인 음악), each every 2.5 s. Their due
      times are staggered so that at most one slow request interrupts the fast loop at a time.
-     Navigation fields arrive inside `DriveState`, so they refresh on the fast path at no
-     extra cost.
+     묶음마다 따로 요청하므로 키 역할 때문에 한 묶음(예: 위치)이 거부돼도 나머지는 받는다.
+     묶음이 셋 늘어 빠른 경로를 끊는 횟수도 늘었으므로, 속도 지연(P95)을 다시 측정해야 한다.
+     Navigation fields(목적지, 남은 시간·거리, 교통 지연, 도착 시 배터리)와 누적 주행거리는
+     `DriveState`에 실려 오므로 빠른 경로에서 추가 비용 없이 갱신된다.
 7. Publishes each decoded sample straight to the UI `StateFlow` from the BLE thread. There is
    no queue and no batching.
 8. Records the timing of every request and shows live percentiles. The full log can be

@@ -148,7 +148,7 @@ not documented here.
 | 8 | `active_route_minutes_to_arrival` | float | Navigation ETA, minutes | S |
 | 9 | `active_route_miles_to_arrival` | float | Remaining route distance, miles | S |
 | 10 | `active_route_traffic_minutes_delay` | float | Traffic delay, minutes | S |
-| 11 | `active_route_energy_at_arrival` | float | Predicted energy at arrival; unit not stated (% SoC or kWh?) | S |
+| 11 | `active_route_energy_at_arrival` | float | Predicted energy at arrival; unit not stated (% SoC or kWh?). 앱은 % SoC로 가정해 "61% at arrival"로 표시한다. 실차 화면과 비교해 확인 필요 | S |
 | 14 | `last_route_update` | uint32 | Time of the last route update; epoch seconds (inferred) | - |
 | 15 | `last_traffic_update` | Timestamp | Time of the last traffic update | - |
 | 12 | `active_route_coordinates` | `LatLong` {float latitude, float longitude} | Destination coordinates | - |

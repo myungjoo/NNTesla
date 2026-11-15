@@ -1,7 +1,9 @@
 package io.github.myungjoo.nntesla.ble
 
 import com.tesla.generated.carserver.vehicle.Vehicle
+import io.github.myungjoo.nntesla.vehicledata.Closures
 import io.github.myungjoo.nntesla.vehicledata.FastState
+import io.github.myungjoo.nntesla.vehicledata.Media
 import io.github.myungjoo.nntesla.vehicledata.ShiftState
 import io.github.myungjoo.nntesla.vehicledata.SlowState
 import io.github.myungjoo.nntesla.vehicledata.Timed
@@ -50,7 +52,9 @@ class TeslaBleDataSource : VehicleDataSource {
             fastFlow.value = state
             published = state
         }
-        if (data.hasChargeState() || data.hasClimateState() || data.hasTirePressureState() || data.hasDriveState()) {
+        if (data.hasChargeState() || data.hasClimateState() || data.hasTirePressureState() || data.hasDriveState() ||
+            data.hasClosuresState() || data.hasLocationState() || data.hasMediaState()
+        ) {
             slowFlow.value = mergeSlow(slowFlow.value, data, receivedAtNanos)
         }
         return published
@@ -93,6 +97,61 @@ class TeslaBleDataSource : VehicleDataSource {
             s = s.copy(
                 destination = Timed(if (d.hasActiveRouteDestination()) d.activeRouteDestination else null, t),
                 minutesToArrival = Timed(if (d.hasActiveRouteMinutesToArrival()) d.activeRouteMinutesToArrival else null, t),
+                routeDistanceKm = Timed(if (d.hasActiveRouteMilesToArrival()) d.activeRouteMilesToArrival * KM_PER_MILE else null, t),
+                trafficDelayMinutes = Timed(if (d.hasActiveRouteTrafficMinutesDelay()) d.activeRouteTrafficMinutesDelay else null, t),
+                energyAtArrivalPercent = Timed(if (d.hasActiveRouteEnergyAtArrival()) d.activeRouteEnergyAtArrival else null, t),
+                odometerKm = Timed(
+                    if (d.hasOdometerInHundredthsOfAMile()) d.odometerInHundredthsOfAMile / 100f * KM_PER_MILE else null,
+                    t,
+                ),
+            )
+        }
+        if (data.hasLocationState()) {
+            val l = data.locationState
+            s = s.copy(headingDegrees = Timed(if (l.hasHeading()) l.heading else null, t))
+        }
+        if (data.hasClosuresState()) {
+            val c = data.closuresState
+            s = s.copy(
+                closures = Timed(
+                    Closures(
+                        frontLeftDoorOpen = if (c.hasDoorOpenDriverFront()) c.doorOpenDriverFront else null,
+                        frontRightDoorOpen = if (c.hasDoorOpenPassengerFront()) c.doorOpenPassengerFront else null,
+                        rearLeftDoorOpen = if (c.hasDoorOpenDriverRear()) c.doorOpenDriverRear else null,
+                        rearRightDoorOpen = if (c.hasDoorOpenPassengerRear()) c.doorOpenPassengerRear else null,
+                        frunkOpen = if (c.hasDoorOpenTrunkFront()) c.doorOpenTrunkFront else null,
+                        trunkOpen = if (c.hasDoorOpenTrunkRear()) c.doorOpenTrunkRear else null,
+                        windowsOpen = listOf(
+                            if (c.hasWindowOpenDriverFront()) c.windowOpenDriverFront else null,
+                            if (c.hasWindowOpenPassengerFront()) c.windowOpenPassengerFront else null,
+                            if (c.hasWindowOpenDriverRear()) c.windowOpenDriverRear else null,
+                            if (c.hasWindowOpenPassengerRear()) c.windowOpenPassengerRear else null,
+                        ),
+                        locked = if (c.hasLocked()) c.locked else null,
+                        sentryArmed = if (c.hasSentryModeState()) {
+                            c.sentryModeState.typeCase.let {
+                                it != Vehicle.ClosuresState.SentryModeState.TypeCase.OFF &&
+                                    it != Vehicle.ClosuresState.SentryModeState.TypeCase.TYPE_NOT_SET
+                            }
+                        } else {
+                            null
+                        },
+                    ),
+                    t,
+                ),
+            )
+        }
+        if (data.hasMediaState()) {
+            val m = data.mediaState
+            s = s.copy(
+                media = Timed(
+                    Media(
+                        artist = if (m.hasNowPlayingArtist()) m.nowPlayingArtist.ifEmpty { null } else null,
+                        title = if (m.hasNowPlayingTitle()) m.nowPlayingTitle.ifEmpty { null } else null,
+                        source = if (m.hasNowPlayingSource()) m.nowPlayingSource.name.removePrefix("MediaSourceType_") else null,
+                    ),
+                    t,
+                ),
             )
         }
         return s

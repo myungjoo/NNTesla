@@ -43,4 +43,35 @@ data class SlowState(
     val minutesToArrival: Timed<Float?>? = null,
     /** Front-left, front-right, rear-left, rear-right. */
     val tirePressureKpa: Timed<List<Float?>>? = null,
+    /** 경로 남은 거리. */
+    val routeDistanceKm: Timed<Float?>? = null,
+    /** 교통 때문에 늘어난 시간. */
+    val trafficDelayMinutes: Timed<Float?>? = null,
+    /** 도착 시 예상 배터리. 차량 단위가 문서에 없어 %로 가정한다(docs/ble-data-inventory.md). */
+    val energyAtArrivalPercent: Timed<Float?>? = null,
+    val odometerKm: Timed<Float?>? = null,
+    /** 진행 방향, 북쪽 0도에서 시계 방향. */
+    val headingDegrees: Timed<Int?>? = null,
+    val closures: Timed<Closures?>? = null,
+    val media: Timed<Media?>? = null,
 )
+
+/** 도어·트렁크·창문·잠금 상태. null은 "차량이 보고하지 않음". 운전석은 왼쪽(좌핸들) 기준이다. */
+data class Closures(
+    val frontLeftDoorOpen: Boolean?,
+    val frontRightDoorOpen: Boolean?,
+    val rearLeftDoorOpen: Boolean?,
+    val rearRightDoorOpen: Boolean?,
+    val frunkOpen: Boolean?,
+    val trunkOpen: Boolean?,
+    /** Front-left, front-right, rear-left, rear-right. */
+    val windowsOpen: List<Boolean?>,
+    val locked: Boolean?,
+    val sentryArmed: Boolean?,
+) {
+    val anyDoorOpen: Boolean get() = listOf(frontLeftDoorOpen, frontRightDoorOpen, rearLeftDoorOpen, rearRightDoorOpen).any { it == true }
+    val anyLidOpen: Boolean get() = frunkOpen == true || trunkOpen == true
+    val anyWindowOpen: Boolean get() = windowsOpen.any { it == true }
+}
+
+data class Media(val artist: String?, val title: String?, val source: String?)

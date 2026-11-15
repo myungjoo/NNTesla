@@ -22,7 +22,15 @@ class PollingScheduler(
     data class Config(
         val maxInFlight: Int = 1,
         val slowEnabled: Boolean = true,
-        val slowCategories: List<StateCategory> = listOf(StateCategory.CHARGE, StateCategory.CLIMATE, StateCategory.TIRE_PRESSURE),
+        // 묶음마다 따로 요청하므로(slowBatched=false) 키 역할에 따라 한 묶음(예: 위치)이 거부돼도 나머지는 받는다.
+        val slowCategories: List<StateCategory> = listOf(
+            StateCategory.CHARGE,
+            StateCategory.CLIMATE,
+            StateCategory.TIRE_PRESSURE,
+            StateCategory.CLOSURES,
+            StateCategory.LOCATION,
+            StateCategory.MEDIA,
+        ),
         /** Request every slow category in one GetVehicleData instead of one category per request. */
         val slowBatched: Boolean = false,
         val slowPeriodMillis: Long = 2_500L,
