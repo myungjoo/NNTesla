@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
@@ -60,6 +61,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -106,8 +109,6 @@ private const val SPEED_FRACTION = 0.45f
 /** Narrowest a tools section may get before the tools screen drops to fewer columns. */
 private val MIN_SECTION_WIDTH = 300.dp
 
-/** Narrowest a driving-info tile may get before the drive panel drops to fewer columns. */
-private val MIN_TILE_WIDTH = 150.dp
 private val GAP = 8.dp
 
 /**
@@ -168,39 +169,74 @@ private fun SpeedPanel(vm: SpikeViewModel, modifier: Modifier) {
     }
 }
 
+/** 주행 정보 타일 하나. 값은 [TileGrid]가 정한 크기로 그린다. */
+private sealed interface DriveTile {
+    data class Value(val label: String, val value: String, val unit: String) : DriveTile
+    data class Tires(val kpa: List<Float?>?) : DriveTile
+}
+
 /**
- * 속도 밖의 주행 정보. 위쪽 줄에 연결 상태와 설정 버튼, 그 아래에 정보 타일을 둔다. 타일 열 수는 남은
- * 폭을 따라가므로, 세로 모드 폰에서는 2~3열, 가로 모드나 펼친 폴드에서는 더 많은 열로 퍼진다.
+ * 속도 밖의 주행 정보. 위쪽 줄에 연결 상태와 설정 버튼, 그 아래를 타일이 빈칸 없이 채운다. 배터리와 주행 가능
+ * 거리는 위쪽 영역에 나머지보다 2.5~3배 큰 글자로, 나머지는 아래쪽 영역에 둔다. 두 영역의 높이, 열 수, 글자
+ * 크기는 [TileGrid.split]이 남은 영역에 맞춰 고른다. 마지막 줄이 덜 차면 그 줄 타일이 넓어진다.
  */
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun DrivePanel(vm: SpikeViewModel, onOpenTools: () -> Unit, modifier: Modifier) {
     val fast by vm.fast.collectAsStateWithLifecycle()
     val slow by vm.slow.collectAsStateWithLifecycle()
     val status by vm.status.collectAsStateWithLifecycle()
+    val primary = listOf(
+        DriveTile.Value("Battery", slow.batteryLevelPercent.show(), "%"),
+        DriveTile.Value("Range", slow.batteryRangeKm.show("%.0f"), "km"),
+    )
+    val secondary = buildList {
+        add(DriveTile.Value("Power", fast?.powerKw?.toString() ?: "-", "kW"))
+        add(DriveTile.Value("Outside", slow.outsideTempCelsius.show("%.0f"), "°C"))
+        add(DriveTile.Value("Inside", slow.insideTempCelsius.show("%.0f"), "°C"))
+        add(DriveTile.Tires(slow.tirePressureKpa?.value))
+        val destination = slow.destination?.value
+        if (!destination.isNullOrEmpty()) add(DriveTile.Value(destination, slow.minutesToArrival.show("%.0f"), "min"))
+    }
     Column(modifier.padding(horizontal = GAP)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             ConnectionBadge(status.first, Modifier.weight(1f))
             IconButton(onClick = onOpenTools) { Icon(Icons.Filled.Settings, contentDescription = "Settings") }
         }
-        BoxWithConstraints(Modifier.fillMaxWidth().weight(1f)) {
-            val columns = ((maxWidth + GAP) / (MIN_TILE_WIDTH + GAP)).toInt().coerceAtLeast(1)
-            val tileWidth = (maxWidth - GAP * (columns - 1)) / columns
-            val tile = Modifier.width(tileWidth)
-            FlowRow(
-                modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = GAP),
-                horizontalArrangement = Arrangement.spacedBy(GAP),
-                verticalArrangement = Arrangement.spacedBy(GAP),
-            ) {
-                InfoTile("Battery", slow.batteryLevelPercent.show(), "%", tile)
-                InfoTile("Range", slow.batteryRangeKm.show("%.0f"), "km", tile)
-                InfoTile("Power", fast?.powerKw?.toString() ?: "-", "kW", tile)
-                InfoTile("Outside", slow.outsideTempCelsius.show("%.1f"), "°C", tile)
-                InfoTile("Inside", slow.insideTempCelsius.show("%.1f"), "°C", tile)
-                TireTile(slow.tirePressureKpa?.value, tile)
-                val destination = slow.destination?.value
-                if (!destination.isNullOrEmpty()) {
-                    InfoTile(destination, slow.minutesToArrival.show("%.0f"), "min", tile)
+        BoxWithConstraints(Modifier.fillMaxWidth().weight(1f).padding(bottom = GAP)) {
+            val split = TileGrid.split(primary.size, secondary.size, maxWidth.value, maxHeight.value, GAP.value)
+            val density = LocalDensity.current
+            Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(GAP)) {
+                TileBlock(
+                    primary,
+                    split.primary.columns,
+                    with(density) { split.primaryValueSize.dp.toSp() },
+                    inline = false,
+                    Modifier.fillMaxWidth().height(split.primaryHeight.dp),
+                )
+                TileBlock(
+                    secondary,
+                    split.secondary.columns,
+                    with(density) { split.secondary.valueSize.dp.toSp() },
+                    inline = true,
+                    Modifier.fillMaxWidth().weight(1f),
+                )
+            }
+        }
+    }
+}
+
+/** [tiles]를 [columns]열 격자로 [modifier] 영역에 꽉 채운다. [inline]이면 라벨과 값을 한 줄에 둔다. */
+@Composable
+private fun TileBlock(tiles: List<DriveTile>, columns: Int, valueSize: TextUnit, inline: Boolean, modifier: Modifier) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(GAP)) {
+        tiles.chunked(columns).forEach { row ->
+            Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(GAP)) {
+                row.forEach { tile ->
+                    val m = Modifier.weight(1f).fillMaxHeight()
+                    when (tile) {
+                        is DriveTile.Value -> if (inline) InlineTile(tile, valueSize, m) else InfoTile(tile, valueSize, m)
+                        is DriveTile.Tires -> TireTile(tile.kpa, valueSize, m)
+                    }
                 }
             }
         }
@@ -226,27 +262,71 @@ private fun ConnectionBadge(state: TeslaVehicleClient.State, modifier: Modifier)
 }
 
 @Composable
-private fun InfoTile(label: String, value: String, unit: String, modifier: Modifier) {
+private fun InfoTile(tile: DriveTile.Value, valueSize: TextUnit, modifier: Modifier) {
     Card(modifier) {
-        Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
-            Text(label, style = MaterialTheme.typography.labelMedium, maxLines = 1)
-            Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(value, fontSize = 32.sp, lineHeight = 34.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
-                Text(unit, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(bottom = 4.dp))
+        Column(Modifier.fillMaxSize().padding(horizontal = TileGrid.TILE_PADDING.dp, vertical = 6.dp)) {
+            Text(tile.label, fontSize = (valueSize * 0.3f).atLeast(MIN_LABEL_SP), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            // 타일이 세로로 길어도(펼친 Fold) 값이 아래에 붙지 않게 남은 높이의 가운데에 둔다.
+            Row(
+                Modifier.fillMaxWidth().weight(1f),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterHorizontally),
+            ) {
+                Text(
+                    tile.value,
+                    fontSize = valueSize,
+                    lineHeight = valueSize,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                )
+                Text(tile.unit, fontSize = (valueSize * 0.35f).atLeast(MIN_LABEL_SP))
             }
         }
     }
 }
 
-/** 타이어 공기압 네 개를 차 모양대로 앞 두 개, 뒤 두 개로. */
+/** 라벨과 단위의 최소 글자 크기. 값 글자가 작은 타일에서도 읽을 수 있게. */
+private const val MIN_LABEL_SP = 12f
+
+private fun TextUnit.atLeast(minSp: Float): TextUnit = if (value < minSp) minSp.sp else this
+
+/** 라벨은 왼쪽, 값과 단위는 오른쪽에 한 줄로. 낮은 타일에서도 값이 잘리지 않는다. */
 @Composable
-private fun TireTile(kpa: List<Float?>?, modifier: Modifier) {
-    fun v(i: Int) = kpa?.getOrNull(i)?.let { "%.0f".format(it) } ?: "-"
+private fun InlineTile(tile: DriveTile.Value, valueSize: TextUnit, modifier: Modifier) {
     Card(modifier) {
-        Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
-            Text("Tires (kPa)", style = MaterialTheme.typography.labelMedium, maxLines = 1)
-            Text("${v(0)}  ${v(1)}", fontSize = 20.sp, lineHeight = 24.sp, fontWeight = FontWeight.SemiBold)
-            Text("${v(2)}  ${v(3)}", fontSize = 20.sp, lineHeight = 24.sp, fontWeight = FontWeight.SemiBold)
+        Row(
+            Modifier.fillMaxSize().padding(horizontal = TileGrid.TILE_PADDING.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                tile.label,
+                fontSize = (valueSize * 0.4f).atLeast(MIN_LABEL_SP),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            Text(tile.value, fontSize = valueSize, lineHeight = valueSize, fontWeight = FontWeight.SemiBold, maxLines = 1)
+            Text(" " + tile.unit, fontSize = (valueSize * 0.4f).atLeast(MIN_LABEL_SP), maxLines = 1)
+        }
+    }
+}
+
+/** 타이어 공기압 네 개를 차 모양대로 앞 두 개, 뒤 두 개로. 라벨 오른쪽에 두 줄, 줄마다 값 글자의 55%. */
+@Composable
+private fun TireTile(kpa: List<Float?>?, valueSize: TextUnit, modifier: Modifier) {
+    fun v(i: Int) = kpa?.getOrNull(i)?.let { "%.0f".format(it) } ?: "-"
+    val size = valueSize * 0.55f
+    Card(modifier) {
+        Row(
+            Modifier.fillMaxSize().padding(horizontal = TileGrid.TILE_PADDING.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("Tires", fontSize = (valueSize * 0.4f).atLeast(MIN_LABEL_SP), maxLines = 1, modifier = Modifier.weight(1f))
+            Column(horizontalAlignment = Alignment.End) {
+                Text("${v(0)}  ${v(1)}", fontSize = size, lineHeight = size, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                Text("${v(2)}  ${v(3)}", fontSize = size, lineHeight = size, fontWeight = FontWeight.SemiBold, maxLines = 1)
+            }
+            Text(" kPa", fontSize = (valueSize * 0.4f).atLeast(MIN_LABEL_SP), maxLines = 1)
         }
     }
 }
