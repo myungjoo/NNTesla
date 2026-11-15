@@ -153,6 +153,10 @@ class Session private constructor(
             nanoClock: () -> Long = System::nanoTime,
         ): Session {
             val info = SessionInfo.parseFrom(encodedInfo)
+            // 의도적으로 HMAC 검증 전에 판정한다. 페어링 전 응답의 태그가 검증된다는 보장이 없어, 검증을
+            // 앞세우면 "페어링 필요"가 "handshake 실패"로 바뀌어 페어링 흐름이 막힐 수 있다. 위조 응답으로
+            // 얻는 효과는 연결 거부(DoS)뿐이고, 이는 BLE 전파 방해로도 가능하다. 세션 키는 아래에서
+            // 검증을 통과해야만 만들어진다.
             if (info.status == Signatures.Session_Info_Status.SESSION_INFO_STATUS_KEY_NOT_ON_WHITELIST) {
                 throw KeyNotPairedException()
             }
