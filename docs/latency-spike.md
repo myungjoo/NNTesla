@@ -104,6 +104,13 @@ CSV.
 6. Pull the CSV with
    `adb pull /sdcard/Android/data/io.github.myungjoo.nntesla/files/`.
 
+### 차량 연결 시 자동 실행
+
+**Set up auto-launch**를 누르고 시스템 창에서 차량의 블루투스 기기(예: `Tesla Model Y`)를 고르면,
+이후 그 기기가 폰에 연결될 때(차에 타서 오디오가 붙을 때) 앱이 자동으로 뜬다. CompanionDeviceManager로
+연결한 앱은 Android 12+의 백그라운드 액티비티 실행 제한에서 예외라 가능하다. 설정 앱에서 강제
+종료하면 다음에 직접 열 때까지 동작하지 않으며, 배터리 설정에서 앱을 "제한 없음"으로 두는 것이 안전하다.
+
 ## Known limitations
 
 - **Speed unit:** the unit of `DriveState.speed` / `speed_float` is not documented upstream.

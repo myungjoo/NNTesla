@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- 차량 연결 시 자동 실행(CarAutoLaunch). 없는 기기에서는 그 기능만 쓸 수 없다. -->
+    <uses-feature android:name="android.software.companion_device_setup" android:required="false" />
+
     <application
         android:allowBackup="false"
         android:label="@string/app_name"
@@ -15,5 +18,16 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- ACL_CONNECTED는 매니페스트 리시버로 받을 수 있는 예외 브로드캐스트다. 보내는 쪽에
+             BLUETOOTH_CONNECT를 요구해 다른 앱이 가짜 브로드캐스트로 앱을 띄우지 못하게 한다. -->
+        <receiver
+            android:name=".spike.CarConnectedReceiver"
+            android:exported="true"
+            android:permission="android.permission.BLUETOOTH_CONNECT">
+            <intent-filter>
+                <action android:name="android.bluetooth.device.action.ACL_CONNECTED" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

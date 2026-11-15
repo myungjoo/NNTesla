@@ -3,7 +3,9 @@ package io.github.myungjoo.nntesla.spike
 import android.os.Bundle
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.foundation.layout.Arrangement
@@ -36,11 +38,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -220,6 +224,40 @@ private fun ConnectionSection(vm: SpikeViewModel) {
         Button(onClick = vm::connect) { Text("Connect") }
         OutlinedButton(onClick = vm::disconnect) { Text("Disconnect") }
         OutlinedButton(onClick = vm::retryHandshake) { Text("Retry handshake") }
+    }
+    AutoLaunchRow()
+}
+
+/** 차량 블루투스 연결 시 자동 실행 설정. 상태는 시스템(CompanionDeviceManager)이 들고 있다. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun AutoLaunchRow() {
+    val context = LocalContext.current
+    var associated by remember { mutableStateOf(CarAutoLaunch.associatedAddresses(context)) }
+    var error by remember { mutableStateOf("") }
+    val chooser = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) {
+        associated = CarAutoLaunch.associatedAddresses(context)
+    }
+    Text(
+        if (associated.isEmpty()) "Auto-launch: off" else "Auto-launch on car Bluetooth: ${associated.joinToString()}",
+        style = MaterialTheme.typography.bodySmall,
+    )
+    if (error.isNotEmpty()) Text(error, style = MaterialTheme.typography.bodySmall)
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedButton(onClick = {
+            error = ""
+            CarAutoLaunch.requestAssociation(
+                context,
+                onChooser = { chooser.launch(IntentSenderRequest.Builder(it).build()) },
+                onError = { error = it },
+            )
+        }) { Text(if (associated.isEmpty()) "Set up auto-launch" else "Add car") }
+        if (associated.isNotEmpty()) {
+            OutlinedButton(onClick = {
+                CarAutoLaunch.disassociateAll(context)
+                associated = CarAutoLaunch.associatedAddresses(context)
+            }) { Text("Turn off auto-launch") }
+        }
     }
 }
 
