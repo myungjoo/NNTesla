@@ -228,35 +228,58 @@ private fun ConnectionSection(vm: SpikeViewModel) {
     AutoLaunchRow()
 }
 
-/** 차량 블루투스 연결 시 자동 실행 설정. 상태는 시스템(CompanionDeviceManager)이 들고 있다. */
+/**
+ * 차량 블루투스 연결 시 자동 실행 설정. 연결 상태는 시스템(CompanionDeviceManager)이 들고 있다.
+ * 페어링된 기기 중 이름에 Tesla가 들어간 것이 하나면 바로 그 기기로 요청하고, 아니면 이름 목록에서 고르게 한다.
+ */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun AutoLaunchRow() {
     val context = LocalContext.current
-    var associated by remember { mutableStateOf(CarAutoLaunch.associatedAddresses(context)) }
+    var associated by remember { mutableStateOf(CarAutoLaunch.describeAssociated(context)) }
+    var choices by remember { mutableStateOf<List<CarAutoLaunch.BondedDevice>>(emptyList()) }
     var error by remember { mutableStateOf("") }
     val chooser = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) {
-        associated = CarAutoLaunch.associatedAddresses(context)
+        associated = CarAutoLaunch.describeAssociated(context)
+    }
+    fun associate(device: CarAutoLaunch.BondedDevice) {
+        choices = emptyList()
+        error = ""
+        CarAutoLaunch.requestAssociation(
+            context,
+            device.address,
+            onChooser = { chooser.launch(IntentSenderRequest.Builder(it).build()) },
+            onError = { error = it },
+        )
     }
     Text(
-        if (associated.isEmpty()) "Auto-launch: off" else "Auto-launch on car Bluetooth: ${associated.joinToString()}",
+        if (associated.isEmpty()) "Auto-launch: off" else "Auto-launch on: ${associated.joinToString()}",
         style = MaterialTheme.typography.bodySmall,
     )
     if (error.isNotEmpty()) Text(error, style = MaterialTheme.typography.bodySmall)
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         OutlinedButton(onClick = {
-            error = ""
-            CarAutoLaunch.requestAssociation(
-                context,
-                onChooser = { chooser.launch(IntentSenderRequest.Builder(it).build()) },
-                onError = { error = it },
-            )
+            val bonded = CarAutoLaunch.bondedDevices(context)
+            val teslas = bonded.filter { it.looksLikeTesla }
+            when {
+                teslas.size == 1 -> associate(teslas.single())
+                bonded.isEmpty() -> error = "No paired Bluetooth devices. Pair the car in Bluetooth settings first."
+                else -> choices = bonded
+            }
         }) { Text(if (associated.isEmpty()) "Set up auto-launch" else "Add car") }
         if (associated.isNotEmpty()) {
             OutlinedButton(onClick = {
                 CarAutoLaunch.disassociateAll(context)
-                associated = CarAutoLaunch.associatedAddresses(context)
+                associated = CarAutoLaunch.describeAssociated(context)
             }) { Text("Turn off auto-launch") }
+        }
+    }
+    if (choices.isNotEmpty()) {
+        Text("Choose the car:", style = MaterialTheme.typography.bodySmall)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            choices.forEach { device ->
+                OutlinedButton(onClick = { associate(device) }) { Text(device.name) }
+            }
         }
     }
 }
