@@ -29,8 +29,9 @@ class LatencyRecorder(private val frameNanos: Long) {
         val result: TeslaVehicleClient.Result,
         val fast: FastState?,
     ) {
-        var displayNanos = 0L
-        var latencyBoundNanos = 0L
+        // 락 안에서 쓰고, snapshot/exportCsv는 락 밖에서 읽는다.
+        @Volatile var displayNanos = 0L
+        @Volatile var latencyBoundNanos = 0L
     }
 
     private val rows = ArrayList<Row>()
@@ -97,8 +98,20 @@ class LatencyRecorder(private val frameNanos: Long) {
         awaitingDraw.keys.removeAll { it < sampleReceivedAtNanos }
     }
 
-    @Synchronized
+    /**
+     * 현재까지의 지표를 계산한다. 락은 기록 목록을 복사하는 동안만 잡는다. 정렬·백분위 계산까지 락 안에서
+     * 하면 기록이 쌓일수록 메인 스레드의 [markDrawn](속도 그리기)과 BLE 스레드의 [record]가 그만큼
+     * 막혀, 측정 행위가 측정 대상인 지연을 부풀린다.
+     */
     fun snapshot(): Report {
+        val rows: List<Row>
+        val startNanos: Long
+        val gaps: Int
+        synchronized(this) {
+            rows = ArrayList(this.rows)
+            startNanos = this.startNanos
+            gaps = this.gaps
+        }
         val now = System.nanoTime()
         val fastRows = rows.filter { it.kind == Kind.FAST }
         val slowRows = rows.filter { it.kind == Kind.SLOW }
@@ -146,8 +159,9 @@ class LatencyRecorder(private val frameNanos: Long) {
         )
     }
 
-    @Synchronized
+    /** 파일 쓰기도 [snapshot]과 같은 이유로 락 밖에서 한다. */
     fun exportCsv(file: File) {
+        val rows = synchronized(this) { ArrayList(this.rows) }
         file.bufferedWriter().use { w ->
             w.write(
                 "kind,categories,send_ns,written_ns,first_rx_ns,complete_ns,decoded_ns,display_ns," +
