@@ -38,6 +38,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -74,6 +75,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.tesla.generated.keys.Keys
 import io.github.myungjoo.nntesla.ble.PollingScheduler
 import io.github.myungjoo.nntesla.ble.TeslaVehicleClient
+import io.github.myungjoo.nntesla.vehicledata.Media
+import io.github.myungjoo.nntesla.vehicledata.SlowState
 import io.github.myungjoo.nntesla.vehicledata.Timed
 
 class MainActivity : ComponentActivity() {
@@ -181,13 +184,29 @@ private fun SpeedTelltales(vm: SpikeViewModel, modifier: Modifier) {
     TelltaleRow(slow.closures?.value, modifier)
 }
 
-/** 주행 정보 타일 하나. 값은 [TileGrid]가 정한 크기로 그린다. */
+/** 주행 정보 타일 하나. 값은 [TileGrid]가 정한 크기로 그린다. [wide]면 한 줄을 통째로 쓴다. */
 private sealed interface DriveTile {
+    val wide: Boolean get() = false
+
     data class Value(val label: String, val value: String, val unit: String) : DriveTile
     data class Tires(val kpa: List<Float?>?) : DriveTile
 
-    /** 한 칸에 두 값(예: 실외·실내 온도)을 위아래로. */
-    data class Pair(val label1: String, val value1: String, val label2: String, val value2: String, val unit: String) : DriveTile
+    /** 작은 화면에서 실외·실내 온도를 한 줄로: "Out: -5 °C / In: 22 °C". 한 줄을 통째로 쓴다. */
+    data class Temps(val outside: String, val inside: String) : DriveTile {
+        override val wide get() = true
+    }
+
+    data class Navigation(
+        val destination: String?,
+        val minutes: String,
+        val detail: String,
+    ) : DriveTile {
+        override val wide get() = true
+    }
+
+    data class NowPlaying(val text: String?, val source: String?) : DriveTile {
+        override val wide get() = true
+    }
 }
 
 /**
@@ -195,8 +214,8 @@ private sealed interface DriveTile {
  * 거리는 위쪽 영역에 나머지보다 2.5~3배 큰 글자로, 나머지는 아래쪽 영역에 둔다. 두 영역의 높이, 열 수, 글자
  * 크기는 [TileGrid.split]이 남은 영역에 맞춰 고른다. 마지막 줄이 덜 차면 그 줄 타일이 넓어진다.
  *
- * 내비게이션 칸은 경로가 없어도 자리를 지킨다(경로가 생길 때 배치가 바뀌지 않게). 칸이 모자라면
- * ([TileGrid.MERGE_GAIN] 이상 글자가 커지면) 실외·실내 온도를 한 칸에 위아래로 합친다.
+ * 내비게이션과 재생 중인 음악은 글이 길어 한 줄을 통째로 쓰고, 값이 없어도 자리를 지킨다(값이 생길 때 배치가
+ * 바뀌지 않게). 작은 화면([TileGrid.SMALL_PANEL_HEIGHT] 미만)에서는 실외·실내 온도를 "Out: / In:" 한 줄로 합친다.
  */
 @Composable
 private fun DrivePanel(vm: SpikeViewModel, onOpenTools: () -> Unit, modifier: Modifier) {
@@ -209,19 +228,18 @@ private fun DrivePanel(vm: SpikeViewModel, onOpenTools: () -> Unit, modifier: Mo
     )
     val outside = slow.outsideTempCelsius.show("%.0f")
     val inside = slow.insideTempCelsius.show("%.0f")
-    val destination = slow.destination?.value
-    val navigation = if (destination.isNullOrEmpty()) {
-        DriveTile.Value("No route", "-", "min")
-    } else {
-        DriveTile.Value(destination, slow.minutesToArrival.show("%.0f"), "min")
-    }
-    val power = DriveTile.Value("Power", fast?.powerKw?.toString() ?: "-", "kW")
-    val tires = DriveTile.Tires(slow.tirePressureKpa?.value)
-    fun secondary(mergeTemps: Boolean) = if (mergeTemps) {
-        listOf(power, DriveTile.Pair("Outside", outside, "Inside", inside, "°C"), tires, navigation)
+    val common = listOf(
+        DriveTile.Value("Power", fast?.powerKw?.toString() ?: "-", "kW"),
+        DriveTile.Tires(slow.tirePressureKpa?.value),
+        DriveTile.Value("Odometer", slow.odometerKm.show("%.0f"), "km"),
+        slow.headingDegrees?.value.let { DriveTile.Value("Heading", Compass.name(it), it?.let { d -> "$d°" } ?: "") },
+    )
+    val wide = listOf(navigationTile(slow), nowPlayingTile(slow.media?.value))
+    fun secondary(mergeTemps: Boolean): List<DriveTile> = if (mergeTemps) {
+        common + DriveTile.Temps(outside, inside) + wide
     } else {
         // 실외·실내 온도를 맨 앞에 나란히 두어 2열 이상이면 같은 줄(같은 높이)에 오게 한다.
-        listOf(DriveTile.Value("Outside", outside, "°C"), DriveTile.Value("Inside", inside, "°C"), power, tires, navigation)
+        listOf(DriveTile.Value("Outside", outside, "°C"), DriveTile.Value("Inside", inside, "°C")) + common + wide
     }
     Column(modifier.padding(horizontal = GAP)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -229,26 +247,28 @@ private fun DrivePanel(vm: SpikeViewModel, onOpenTools: () -> Unit, modifier: Mo
             IconButton(onClick = onOpenTools) { Icon(Icons.Filled.Settings, contentDescription = "Settings") }
         }
         BoxWithConstraints(Modifier.fillMaxWidth().weight(1f).padding(bottom = GAP)) {
-            val separate = secondary(mergeTemps = false)
-            val merged = secondary(mergeTemps = true)
-            val splitSeparate = TileGrid.split(primary.size, separate.size, maxWidth.value, maxHeight.value, GAP.value)
-            val splitMerged = TileGrid.split(primary.size, merged.size, maxWidth.value, maxHeight.value, GAP.value)
-            val mergeTemps = splitMerged.secondary.valueSize >= splitSeparate.secondary.valueSize * TileGrid.MERGE_GAIN
-            val secondary = if (mergeTemps) merged else separate
-            val split = if (mergeTemps) splitMerged else splitSeparate
-            val density = LocalDensity.current
+            fun splitFor(tiles: List<DriveTile>) = TileGrid.split(
+                primary.size,
+                tiles.count { !it.wide },
+                maxWidth.value,
+                maxHeight.value,
+                GAP.value,
+                secondaryWide = tiles.count { it.wide },
+            )
+            val secondary = secondary(mergeTemps = maxHeight.value < TileGrid.SMALL_PANEL_HEIGHT)
+            val split = splitFor(secondary)
             Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(GAP)) {
                 TileBlock(
                     primary,
                     split.primary.columns,
-                    with(density) { split.primaryValueSize.dp.toSp() },
+                    split.primaryValueSize,
                     inline = false,
                     Modifier.fillMaxWidth().height(split.primaryHeight.dp),
                 )
                 TileBlock(
                     secondary,
                     split.secondary.columns,
-                    with(density) { split.secondary.valueSize.dp.toSp() },
+                    split.secondary.valueSize,
                     inline = true,
                     Modifier.fillMaxWidth().weight(1f),
                 )
@@ -257,18 +277,40 @@ private fun DrivePanel(vm: SpikeViewModel, onOpenTools: () -> Unit, modifier: Mo
     }
 }
 
-/** [tiles]를 [columns]열 격자로 [modifier] 영역에 꽉 채운다. [inline]이면 라벨과 값을 한 줄에 둔다. */
+private fun navigationTile(slow: SlowState): DriveTile.Navigation {
+    val destination = slow.destination?.value?.ifEmpty { null }
+    if (destination == null) return DriveTile.Navigation(null, "-", "")
+    val detail = listOfNotNull(
+        slow.routeDistanceKm?.value?.let { "%.0f km".format(it) },
+        slow.trafficDelayMinutes?.value?.takeIf { it >= 1f }?.let { "+%.0f min traffic".format(it) },
+        slow.energyAtArrivalPercent?.value?.let { "%.0f%% at arrival".format(it) },
+    ).joinToString(" · ")
+    return DriveTile.Navigation(destination, slow.minutesToArrival.show("%.0f"), detail)
+}
+
+private fun nowPlayingTile(media: Media?): DriveTile.NowPlaying {
+    val text = listOfNotNull(media?.artist, media?.title).joinToString(" — ").ifEmpty { null }
+    return DriveTile.NowPlaying(text, media?.source)
+}
+
+/**
+ * [tiles]를 [columns]열 격자로 [modifier] 영역에 꽉 채운다. 넓은 타일은 뒤에 한 줄씩 둔다.
+ * [inline]이면 라벨과 값을 한 줄에 둔다. [valueDp]는 값 글자 크기(dp)다.
+ */
 @Composable
-private fun TileBlock(tiles: List<DriveTile>, columns: Int, valueSize: TextUnit, inline: Boolean, modifier: Modifier) {
+private fun TileBlock(tiles: List<DriveTile>, columns: Int, valueDp: Float, inline: Boolean, modifier: Modifier) {
+    val rows = tiles.filter { !it.wide }.chunked(columns) + tiles.filter { it.wide }.map { listOf(it) }
     Column(modifier, verticalArrangement = Arrangement.spacedBy(GAP)) {
-        tiles.chunked(columns).forEach { row ->
+        rows.forEach { row ->
             Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(GAP)) {
                 row.forEach { tile ->
                     val m = Modifier.weight(1f).fillMaxHeight()
                     when (tile) {
-                        is DriveTile.Value -> if (inline) InlineTile(tile, valueSize, m) else InfoTile(tile, valueSize, m)
-                        is DriveTile.Tires -> TireTile(tile.kpa, valueSize, m)
-                        is DriveTile.Pair -> PairTile(tile, valueSize, m)
+                        is DriveTile.Value -> if (inline) InlineTile(tile, valueDp, m) else InfoTile(tile, valueDp, m)
+                        is DriveTile.Tires -> TireTile(tile.kpa, valueDp, m)
+                        is DriveTile.Temps -> TempsTile(tile, valueDp, m)
+                        is DriveTile.Navigation -> NavigationTile(tile, valueDp, m)
+                        is DriveTile.NowPlaying -> NowPlayingTile(tile, valueDp, m)
                     }
                 }
             }
@@ -294,25 +336,27 @@ private fun ConnectionBadge(state: TeslaVehicleClient.State, modifier: Modifier)
     }
 }
 
+/** dp 크기를 글자 크기(sp)로. */
 @Composable
-private fun InfoTile(tile: DriveTile.Value, valueSize: TextUnit, modifier: Modifier) {
+private fun Float.dpToSp(): TextUnit = with(LocalDensity.current) { this@dpToSp.dp.toSp() }
+
+/** 라벨·단위 글자 크기(dp). 값 글자에 비례하되 [MIN_LABEL_DP]보다 작아지지 않는다. */
+private fun labelDp(valueDp: Float, ratio: Float = 0.4f) = maxOf(valueDp * ratio, MIN_LABEL_DP)
+
+@Composable
+private fun InfoTile(tile: DriveTile.Value, valueDp: Float, modifier: Modifier) {
+    val value = valueDp.dpToSp()
     Card(modifier) {
         Column(Modifier.fillMaxSize().padding(horizontal = TileGrid.TILE_PADDING.dp, vertical = 6.dp)) {
-            Text(tile.label, fontSize = (valueSize * 0.3f).atLeast(MIN_LABEL_SP), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(tile.label, fontSize = labelDp(valueDp, 0.3f).dpToSp(), maxLines = 1, overflow = TextOverflow.Ellipsis)
             // 타일이 세로로 길어도(펼친 Fold) 값이 아래에 붙지 않게 남은 높이의 가운데에 둔다.
             Row(
                 Modifier.fillMaxWidth().weight(1f),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterHorizontally),
             ) {
-                Text(
-                    tile.value,
-                    fontSize = valueSize,
-                    lineHeight = valueSize,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                )
-                Text(tile.unit, fontSize = (valueSize * 0.35f).atLeast(MIN_LABEL_SP))
+                Text(tile.value, fontSize = value, lineHeight = value, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                Text(tile.unit, fontSize = labelDp(valueDp, 0.35f).dpToSp(), maxLines = 1, softWrap = false)
             }
         }
     }
@@ -321,72 +365,135 @@ private fun InfoTile(tile: DriveTile.Value, valueSize: TextUnit, modifier: Modif
 /** 1 psi = 6.894757 kPa. */
 private const val KPA_PER_PSI = 6.894757f
 
-/** 라벨과 단위의 최소 글자 크기. 값 글자가 작은 타일에서도 읽을 수 있게. */
-private const val MIN_LABEL_SP = 12f
+/** 라벨과 단위의 최소 글자 크기(dp). 값 글자가 작은 타일에서도 읽을 수 있게. */
+private const val MIN_LABEL_DP = 12f
 
-private fun TextUnit.atLeast(minSp: Float): TextUnit = if (value < minSp) minSp.sp else this
-
-/** 라벨은 왼쪽, 값과 단위는 오른쪽에 한 줄로. 낮은 타일에서도 값이 잘리지 않는다. */
+/**
+ * 라벨은 왼쪽, 값과 단위는 오른쪽에 한 줄로. 낮은 타일에서도 값이 잘리지 않는다. 값이 길면(누적 주행거리 등)
+ * 칸 폭에 맞춰 글자를 줄인다([TileGrid.fitValue]).
+ */
 @Composable
-private fun InlineTile(tile: DriveTile.Value, valueSize: TextUnit, modifier: Modifier) {
+private fun InlineTile(tile: DriveTile.Value, valueDp: Float, modifier: Modifier) {
     Card(modifier) {
-        Row(
-            Modifier.fillMaxSize().padding(horizontal = TileGrid.TILE_PADDING.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                tile.label,
-                fontSize = (valueSize * 0.4f).atLeast(MIN_LABEL_SP),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
-            )
-            Text(tile.value, fontSize = valueSize, lineHeight = valueSize, fontWeight = FontWeight.SemiBold, maxLines = 1)
-            Text(" " + tile.unit, fontSize = (valueSize * 0.4f).atLeast(MIN_LABEL_SP), maxLines = 1)
+        BoxWithConstraints(Modifier.fillMaxSize().padding(horizontal = TileGrid.TILE_PADDING.dp)) {
+            val label = labelDp(valueDp)
+            val fitted = TileGrid.fitValue(maxWidth.value, tile.label, tile.value, tile.unit, label, valueDp)
+            Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    tile.label,
+                    fontSize = label.dpToSp(),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(tile.value, fontSize = fitted.dpToSp(), lineHeight = fitted.dpToSp(), fontWeight = FontWeight.SemiBold, maxLines = 1)
+                Text(" " + tile.unit, fontSize = label.dpToSp(), maxLines = 1)
+            }
         }
     }
 }
 
-/** 두 값을 위아래로. 왼쪽에 라벨 두 개, 오른쪽에 값 두 개(줄마다 값 글자의 55%), 끝에 공통 단위. */
+/** 실외·실내 온도를 한 줄로: "Out: -5 °C / In: 22 °C". 칸 폭에 맞춰 숫자 크기를 줄인다. */
 @Composable
-private fun PairTile(tile: DriveTile.Pair, valueSize: TextUnit, modifier: Modifier) {
-    val size = valueSize * 0.55f
-    val label = (valueSize * 0.4f).atLeast(MIN_LABEL_SP)
+private fun TempsTile(tile: DriveTile.Temps, valueDp: Float, modifier: Modifier) {
     Card(modifier) {
-        Row(
-            Modifier.fillMaxSize().padding(horizontal = TileGrid.TILE_PADDING.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(tile.label1, fontSize = label, lineHeight = size, maxLines = 1)
-                Text(tile.label2, fontSize = label, lineHeight = size, maxLines = 1)
+        BoxWithConstraints(Modifier.fillMaxSize().padding(horizontal = TileGrid.TILE_PADDING.dp)) {
+            val label = labelDp(valueDp)
+            val fitted = TileGrid.fitValue(maxWidth.value, "Out: °C / In:", tile.outside + tile.inside, "°C", label, valueDp)
+            val l = label.dpToSp()
+            val v = fitted.dpToSp()
+            Row(
+                Modifier.fillMaxSize(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center,
+            ) {
+                Text("Out: ", fontSize = l, maxLines = 1)
+                Text(tile.outside, fontSize = v, lineHeight = v, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                Text(" °C / In: ", fontSize = l, maxLines = 1)
+                Text(tile.inside, fontSize = v, lineHeight = v, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                Text(" °C", fontSize = l, maxLines = 1)
             }
-            Column(horizontalAlignment = Alignment.End) {
-                Text(tile.value1, fontSize = size, lineHeight = size, fontWeight = FontWeight.SemiBold, maxLines = 1)
-                Text(tile.value2, fontSize = size, lineHeight = size, fontWeight = FontWeight.SemiBold, maxLines = 1)
-            }
-            Text(" " + tile.unit, fontSize = label, maxLines = 1)
         }
     }
 }
 
 /** 타이어 공기압 네 개를 차 모양대로 앞 두 개, 뒤 두 개로. 라벨 오른쪽에 두 줄, 줄마다 값 글자의 55%. */
 @Composable
-private fun TireTile(kpa: List<Float?>?, valueSize: TextUnit, modifier: Modifier) {
+private fun TireTile(kpa: List<Float?>?, valueDp: Float, modifier: Modifier) {
     // 타이어 공기압만은 SI(kPa) 대신 PSI로 보인다(사용자 결정). 데이터 모델은 kPa 그대로 두고 표시할 때만 바꾼다.
     fun v(i: Int) = kpa?.getOrNull(i)?.let { "%.0f".format(it / KPA_PER_PSI) } ?: "-"
-    val size = valueSize * 0.55f
+    val size = (valueDp * 0.55f).dpToSp()
+    val label = labelDp(valueDp).dpToSp()
     Card(modifier) {
         Row(
             Modifier.fillMaxSize().padding(horizontal = TileGrid.TILE_PADDING.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("Tires", fontSize = (valueSize * 0.4f).atLeast(MIN_LABEL_SP), maxLines = 1, modifier = Modifier.weight(1f))
+            Text("Tires", fontSize = label, maxLines = 1, modifier = Modifier.weight(1f))
             Column(horizontalAlignment = Alignment.End) {
                 Text("${v(0)}  ${v(1)}", fontSize = size, lineHeight = size, fontWeight = FontWeight.SemiBold, maxLines = 1)
                 Text("${v(2)}  ${v(3)}", fontSize = size, lineHeight = size, fontWeight = FontWeight.SemiBold, maxLines = 1)
             }
-            Text(" psi", fontSize = (valueSize * 0.4f).atLeast(MIN_LABEL_SP), maxLines = 1)
+            Text(" psi", fontSize = label, maxLines = 1)
+        }
+    }
+}
+
+/** 목적지와 남은 시간. 아래 줄에 남은 거리, 교통 지연, 도착 시 배터리. 경로가 없으면 "No route". */
+@Composable
+private fun NavigationTile(tile: DriveTile.Navigation, valueDp: Float, modifier: Modifier) {
+    val label = labelDp(valueDp).dpToSp()
+    val value = valueDp.dpToSp()
+    val detailDp = labelDp(valueDp, 0.33f)
+    Card(modifier) {
+        BoxWithConstraints(Modifier.fillMaxSize().padding(horizontal = TileGrid.TILE_PADDING.dp)) {
+            // 칸이 두 줄을 담을 만큼 높으면 목적지 아래에 상세를, 낮으면(접은 Fold) 목적지 뒤에 이어 쓴다.
+            val twoLines = maxHeight.value >= (labelDp(valueDp) + detailDp) * 1.6f
+            Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    val destination = tile.destination ?: "No route"
+                    if (twoLines || tile.detail.isEmpty()) {
+                        Text(destination, fontSize = label, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    if (tile.detail.isNotEmpty()) {
+                        Text(
+                            if (twoLines) tile.detail else "$destination · ${tile.detail}",
+                            fontSize = (if (twoLines) detailDp else labelDp(valueDp)).dpToSp(),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            color = if (twoLines) LocalContentColor.current.copy(alpha = 0.7f) else LocalContentColor.current,
+                        )
+                    }
+                }
+                Text(tile.minutes, fontSize = value, lineHeight = value, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                Text(" min", fontSize = label, maxLines = 1)
+            }
+        }
+    }
+}
+
+/** 재생 중인 음악: "아티스트 — 제목". 없으면 흐리게 "Nothing playing". */
+@Composable
+private fun NowPlayingTile(tile: DriveTile.NowPlaying, valueDp: Float, modifier: Modifier) {
+    val label = labelDp(valueDp).dpToSp()
+    Card(modifier) {
+        Row(
+            Modifier.fillMaxSize().padding(horizontal = TileGrid.TILE_PADDING.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text("♪", fontSize = label, maxLines = 1)
+            Text(
+                tile.text ?: "Nothing playing",
+                fontSize = (valueDp * 0.6f).coerceAtLeast(MIN_LABEL_DP).dpToSp(),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                color = if (tile.text == null) LocalContentColor.current.copy(alpha = 0.5f) else LocalContentColor.current,
+                modifier = Modifier.weight(1f),
+            )
+            tile.source?.let {
+                Text(it, fontSize = labelDp(valueDp, 0.33f).dpToSp(), maxLines = 1, color = LocalContentColor.current.copy(alpha = 0.6f))
+            }
         }
     }
 }
@@ -452,7 +559,31 @@ private fun VehicleDataSection(vm: SpikeViewModel) {
         "tires ${slow.tirePressureKpa?.value?.joinToString(" / ") { it?.let { v -> "%.0f".format(v / KPA_PER_PSI) } ?: "-" } ?: "-"} psi",
         style = small,
     )
-    Text("dest ${slow.destination.show()} (${slow.minutesToArrival.show("%.0f")} min)", style = small)
+    Text(
+        "dest ${slow.destination.show()} (${slow.minutesToArrival.show("%.0f")} min, ${slow.routeDistanceKm.show("%.1f")} km, " +
+            "traffic +${slow.trafficDelayMinutes.show("%.0f")} min, arrival ${slow.energyAtArrivalPercent.show("%.0f")} %)",
+        style = small,
+    )
+    Text("odometer ${slow.odometerKm.show("%.1f")} km · heading ${slow.headingDegrees.show()}°", style = small)
+    val c = slow.closures?.value
+    Text(
+        "doors FL ${c?.frontLeftDoorOpen.flag()} FR ${c?.frontRightDoorOpen.flag()} RL ${c?.rearLeftDoorOpen.flag()} " +
+            "RR ${c?.rearRightDoorOpen.flag()} · frunk ${c?.frunkOpen.flag()} trunk ${c?.trunkOpen.flag()}",
+        style = small,
+    )
+    Text(
+        "windows ${c?.windowsOpen?.joinToString(" ") { it.flag() } ?: "-"} · locked ${c?.locked.flag()} · sentry ${c?.sentryArmed.flag()}",
+        style = small,
+    )
+    val m = slow.media?.value
+    Text("media ${m?.source ?: "-"}: ${m?.artist ?: "-"} — ${m?.title ?: "-"}", style = small)
+}
+
+/** 열림·참 = "1", 닫힘·거짓 = "0", 보고 안 됨 = "-". */
+private fun Boolean?.flag(): String = when (this) {
+    true -> "1"
+    false -> "0"
+    null -> "-"
 }
 
 private fun <T> Timed<T>?.show(format: String? = null): String {

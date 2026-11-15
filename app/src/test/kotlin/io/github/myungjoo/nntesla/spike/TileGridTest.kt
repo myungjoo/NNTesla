@@ -45,4 +45,22 @@ class TileGridTest {
             }
         }
     }
+
+    @Test
+    fun wideTilesTakeWholeRows() {
+        val layout = TileGrid.choose(count = 6, width = 390f, height = 400f, gap = 8f, wide = 2)
+        assertEquals(2, layout.columns)
+        assertEquals(5, layout.rows)
+        assertEquals((400f - 8f * 4) / 5, layout.tileHeight, 0.01f)
+    }
+
+    @Test
+    fun fitValueShrinksLongValues() {
+        // 짧은 값은 그대로, 긴 값(누적 주행거리)은 칸 폭에 맞춰 줄어든다.
+        assertEquals(30f, TileGrid.fitValue(156f, "Power", "-120", "kW", 12f, 30f), 0.01f)
+        val odo = TileGrid.fitValue(156f, "Odometer", "123456", "km", 12f, 30f)
+        assertTrue(odo < 30f)
+        val used = (8 + 2 + 2) * TileGrid.CHAR_WIDTH_EM * 12f + 6 * TileGrid.CHAR_WIDTH_EM * odo
+        assertEquals(156f, used, 0.01f)
+    }
 }
