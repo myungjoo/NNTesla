@@ -1,0 +1,191 @@
+package io.github.myungjoo.nntesla.spike
+
+import android.Manifest
+import android.app.Application
+import android.content.pm.PackageManager
+import android.content.Context
+import android.hardware.display.DisplayManager
+import android.view.Display
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import com.tesla.generated.keys.Keys
+import io.github.myungjoo.nntesla.ble.KeystoreEcdhKey
+import io.github.myungjoo.nntesla.ble.PollingScheduler
+import io.github.myungjoo.nntesla.ble.TeslaBleDataSource
+import io.github.myungjoo.nntesla.ble.TeslaVehicleClient
+import io.github.myungjoo.nntesla.vehicledata.FastState
+import io.github.myungjoo.nntesla.vehicledata.SlowState
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
+class SpikeViewModel(app: Application) : AndroidViewModel(app) {
+    private val prefs = app.getSharedPreferences("spike", Context.MODE_PRIVATE)
+    private val key = KeystoreEcdhKey.loadOrCreate()
+    private val dataSource = TeslaBleDataSource()
+
+    private val frameNanos: Long = run {
+        val refresh = app.getSystemService(DisplayManager::class.java)?.getDisplay(Display.DEFAULT_DISPLAY)?.refreshRate ?: 60f
+        (1e9 / refresh).toLong()
+    }
+    private val recorder = LatencyRecorder(frameNanos)
+
+    val publicKeyHex: String = key.publicKeyBytes.joinToString("") { "%02x".format(it) }
+
+    private val _vin = MutableStateFlow(prefs.getString("vin", "") ?: "")
+    val vin: StateFlow<String> = _vin
+
+    private val _status = MutableStateFlow(TeslaVehicleClient.State.IDLE to "")
+    val status: StateFlow<Pair<TeslaVehicleClient.State, String>> = _status
+
+    private val _running = MutableStateFlow(false)
+    val running: StateFlow<Boolean> = _running
+
+    private val _report = MutableStateFlow<Report?>(null)
+    val report: StateFlow<Report?> = _report
+
+    private val _message = MutableStateFlow("")
+    val message: StateFlow<String> = _message
+
+    val fast: StateFlow<FastState?> = dataSource.fast
+    val slow: StateFlow<SlowState> = dataSource.slow
+
+    private var client: TeslaVehicleClient? = null
+    private var scheduler: PollingScheduler? = null
+    private var runConfig: PollingScheduler.Config? = null
+    private var reportJob: Job? = null
+
+    init {
+        // Auto-connect: a VIN from a previous session plus granted permissions is all we need.
+        autoConnectIfPossible()
+    }
+
+    fun setVin(value: String) {
+        val v = value.trim().uppercase()
+        _vin.value = v
+        prefs.edit().putString("vin", v).apply()
+    }
+
+    /** Called after the permission dialog closes; connects if a VIN is already known. */
+    fun autoConnectIfPossible() {
+        if (client == null && _vin.value.length == 17 && hasBlePermissions()) connect()
+    }
+
+    private fun hasBlePermissions(): Boolean = listOf(
+        Manifest.permission.BLUETOOTH_SCAN,
+        Manifest.permission.BLUETOOTH_CONNECT,
+    ).all { ContextCompat.checkSelfPermission(getApplication(), it) == PackageManager.PERMISSION_GRANTED }
+
+    fun connect() {
+        val v = _vin.value
+        if (v.length != 17) {
+            _message.value = "VIN must be 17 characters"
+            return
+        }
+        if (!hasBlePermissions()) {
+            _message.value = "Nearby devices permission is required"
+            return
+        }
+        client?.shutdown()
+        client = TeslaVehicleClient(getApplication(), v, key, object : TeslaVehicleClient.Listener {
+            override fun onStateChanged(state: TeslaVehicleClient.State, detail: String) {
+                _status.value = state to detail
+                viewModelScope.launch(Dispatchers.Main) { onClientState(state) }
+            }
+        }).also { it.start(autoReconnect = true) }
+    }
+
+    /** Main thread. Pauses polling while the link is down and resumes it once READY again. */
+    private fun onClientState(state: TeslaVehicleClient.State) {
+        if (state == TeslaVehicleClient.State.READY) {
+            if (_running.value && scheduler == null) startScheduler()
+        } else if (scheduler != null) {
+            scheduler?.stop()
+            scheduler = null
+            recorder.markGap()
+        }
+    }
+
+    fun disconnect() {
+        stopRun()
+        client?.shutdown()
+        client = null
+        _status.value = TeslaVehicleClient.State.IDLE to "disconnected (auto-connect off until Connect)"
+    }
+
+    fun pair(role: Keys.Role) {
+        client?.requestPairing(role)
+    }
+
+    fun retryHandshake() {
+        client?.retryHandshake()
+    }
+
+    /** Starts a measurement run. If the link drops, the run pauses and resumes on reconnect. */
+    fun startRun(config: PollingScheduler.Config) {
+        if (_running.value) return
+        recorder.reset()
+        runConfig = config
+        _running.value = true
+        if (_status.value.first == TeslaVehicleClient.State.READY) startScheduler()
+        reportJob = viewModelScope.launch(Dispatchers.Default) {
+            while (isActive) {
+                _report.value = recorder.snapshot()
+                delay(500)
+            }
+        }
+    }
+
+    private fun startScheduler() {
+        val c = client ?: return
+        val config = runConfig ?: return
+        val s = PollingScheduler(c, config) { kind, result ->
+            // BLE thread: publish first, then record, so recording never delays the UI.
+            val ok = result.outcome as? TeslaVehicleClient.Outcome.Ok
+            val fastState = ok?.let { dataSource.publish(it.data, result.decodedNanos) }
+            recorder.record(kind, result, if (kind == PollingScheduler.Kind.FAST) fastState else null)
+        }
+        scheduler = s
+        s.start()
+    }
+
+    fun stopRun() {
+        scheduler?.stop()
+        scheduler = null
+        runConfig = null
+        reportJob?.cancel()
+        reportJob = null
+        if (_running.value) _report.value = recorder.snapshot()
+        _running.value = false
+    }
+
+    /** Called from the speed text's draw pass. */
+    fun onSpeedDrawn(sampleReceivedAtNanos: Long) {
+        recorder.markDrawn(sampleReceivedAtNanos, System.nanoTime())
+    }
+
+    fun exportCsv() {
+        viewModelScope.launch {
+            val file = withContext(Dispatchers.IO) {
+                val dir = getApplication<Application>().getExternalFilesDir(null) ?: getApplication<Application>().filesDir
+                val name = "spike-" + SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date()) + ".csv"
+                File(dir, name).also { recorder.exportCsv(it) }
+            }
+            _message.value = "Saved ${file.absolutePath}"
+        }
+    }
+
+    override fun onCleared() {
+        disconnect()
+    }
+}
