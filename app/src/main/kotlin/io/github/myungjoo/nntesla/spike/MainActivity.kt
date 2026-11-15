@@ -203,16 +203,13 @@ private fun DrivePanel(vm: SpikeViewModel, onOpenTools: () -> Unit, modifier: Mo
     } else {
         DriveTile.Value(destination, slow.minutesToArrival.show("%.0f"), "min")
     }
-    fun secondary(mergeTemps: Boolean) = buildList {
-        add(DriveTile.Value("Power", fast?.powerKw?.toString() ?: "-", "kW"))
-        if (mergeTemps) {
-            add(DriveTile.Pair("Outside", outside, "Inside", inside, "°C"))
-        } else {
-            add(DriveTile.Value("Outside", outside, "°C"))
-            add(DriveTile.Value("Inside", inside, "°C"))
-        }
-        add(DriveTile.Tires(slow.tirePressureKpa?.value))
-        add(navigation)
+    val power = DriveTile.Value("Power", fast?.powerKw?.toString() ?: "-", "kW")
+    val tires = DriveTile.Tires(slow.tirePressureKpa?.value)
+    fun secondary(mergeTemps: Boolean) = if (mergeTemps) {
+        listOf(power, DriveTile.Pair("Outside", outside, "Inside", inside, "°C"), tires, navigation)
+    } else {
+        // 실외·실내 온도를 맨 앞에 나란히 두어 2열 이상이면 같은 줄(같은 높이)에 오게 한다.
+        listOf(DriveTile.Value("Outside", outside, "°C"), DriveTile.Value("Inside", inside, "°C"), power, tires, navigation)
     }
     Column(modifier.padding(horizontal = GAP)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
