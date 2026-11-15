@@ -285,6 +285,9 @@ private fun InfoTile(tile: DriveTile.Value, valueSize: TextUnit, modifier: Modif
     }
 }
 
+/** 1 psi = 6.894757 kPa. */
+private const val KPA_PER_PSI = 6.894757f
+
 /** 라벨과 단위의 최소 글자 크기. 값 글자가 작은 타일에서도 읽을 수 있게. */
 private const val MIN_LABEL_SP = 12f
 
@@ -314,7 +317,8 @@ private fun InlineTile(tile: DriveTile.Value, valueSize: TextUnit, modifier: Mod
 /** 타이어 공기압 네 개를 차 모양대로 앞 두 개, 뒤 두 개로. 라벨 오른쪽에 두 줄, 줄마다 값 글자의 55%. */
 @Composable
 private fun TireTile(kpa: List<Float?>?, valueSize: TextUnit, modifier: Modifier) {
-    fun v(i: Int) = kpa?.getOrNull(i)?.let { "%.0f".format(it) } ?: "-"
+    // 타이어 공기압만은 SI(kPa) 대신 PSI로 보인다(사용자 결정). 데이터 모델은 kPa 그대로 두고 표시할 때만 바꾼다.
+    fun v(i: Int) = kpa?.getOrNull(i)?.let { "%.0f".format(it / KPA_PER_PSI) } ?: "-"
     val size = valueSize * 0.55f
     Card(modifier) {
         Row(
@@ -326,7 +330,7 @@ private fun TireTile(kpa: List<Float?>?, valueSize: TextUnit, modifier: Modifier
                 Text("${v(0)}  ${v(1)}", fontSize = size, lineHeight = size, fontWeight = FontWeight.SemiBold, maxLines = 1)
                 Text("${v(2)}  ${v(3)}", fontSize = size, lineHeight = size, fontWeight = FontWeight.SemiBold, maxLines = 1)
             }
-            Text(" kPa", fontSize = (valueSize * 0.4f).atLeast(MIN_LABEL_SP), maxLines = 1)
+            Text(" psi", fontSize = (valueSize * 0.4f).atLeast(MIN_LABEL_SP), maxLines = 1)
         }
     }
 }
@@ -389,7 +393,7 @@ private fun VehicleDataSection(vm: SpikeViewModel) {
         style = small,
     )
     Text(
-        "tires ${slow.tirePressureKpa?.value?.joinToString(" / ") { it?.let { v -> "%.0f".format(v) } ?: "-" } ?: "-"} kPa",
+        "tires ${slow.tirePressureKpa?.value?.joinToString(" / ") { it?.let { v -> "%.0f".format(v / KPA_PER_PSI) } ?: "-" } ?: "-"} psi",
         style = small,
     )
     Text("dest ${slow.destination.show()} (${slow.minutesToArrival.show("%.0f")} min)", style = small)

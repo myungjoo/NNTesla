@@ -115,7 +115,8 @@ CSV.
 
 - **Speed unit:** the unit of `DriveState.speed` / `speed_float` is not documented upstream.
   MPH is assumed and converted to km/h for display and for the CSV `speed_kmh` column. All
-  displayed values use SI-based units (km/h, km, °C, kPa, kW). Confirm the speed unit during
+  displayed values use SI-based units (km/h, km, °C, kW), 단 타이어 공기압만 psi로 표시한다(데이터
+  모델은 kPa). Confirm the speed unit during
   a drive by comparing with the car's own display: if the app reads about 1.6 times too high,
   the vehicle reports km/h.
 - **Sleeping car:** waking infotainment through VCSEC is not implemented. If the car is
