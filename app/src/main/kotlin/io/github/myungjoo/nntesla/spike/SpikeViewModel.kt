@@ -119,7 +119,12 @@ class SpikeViewModel(app: Application) : AndroidViewModel(app) {
     /** Main thread. Pauses polling while the link is down and resumes it once READY again. */
     private fun onClientState(state: TeslaVehicleClient.State) {
         if (state == TeslaVehicleClient.State.READY) {
-            if (_running.value && scheduler == null) startScheduler()
+            // 계기판이므로 연결되면 바로 값을 받기 시작한다. 측정 설정을 바꾸려면 설정 화면에서 Stop 후 다시 Start.
+            if (!_running.value) {
+                startRun(PollingScheduler.Config())
+            } else if (scheduler == null) {
+                startScheduler()
+            }
         } else if (scheduler != null) {
             scheduler?.stop()
             scheduler = null

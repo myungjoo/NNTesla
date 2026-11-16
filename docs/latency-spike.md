@@ -102,8 +102,8 @@ CSV.
    After the first successful connection, the app auto-connects on launch using the saved VIN.
    A lost link (car out of range, asleep, BLE error) is retried with backoff (1, 2, 5, 10,
    then every 30 s) until **Disconnect** is tapped.
-5. Pick an experiment and tap **Start run**. When finished, tap **Stop**, then
-   **Export CSV**.
+5. 연결되면(`READY`) 기본 설정으로 측정(폴링)이 자동으로 시작된다. 다른 실험 설정을 쓰려면 설정 화면에서
+   **Stop**, 설정 선택, **Start run** 순으로 다시 시작한다. 끝나면 **Stop**, **Export CSV**.
 6. Pull the CSV with
    `adb pull /sdcard/Android/data/io.github.myungjoo.nntesla/files/`.
 
