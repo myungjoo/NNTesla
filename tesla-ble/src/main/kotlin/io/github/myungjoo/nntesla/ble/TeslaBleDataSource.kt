@@ -1,5 +1,6 @@
 package io.github.myungjoo.nntesla.ble
 
+import android.util.Log
 import com.tesla.generated.carserver.vehicle.Vehicle
 import io.github.myungjoo.nntesla.vehicledata.Closures
 import io.github.myungjoo.nntesla.vehicledata.FastState
@@ -108,7 +109,17 @@ class TeslaBleDataSource : VehicleDataSource {
         }
         if (data.hasLocationState()) {
             val l = data.locationState
-            s = s.copy(headingDegrees = Timed(if (l.hasHeading()) l.heading else null, t))
+            val last = s.headingDegrees
+            // 차량이 위치 응답에서 heading을 빼고 보낼 때가 있다(0°=정북을 생략하는지, GPS 상태에 따라 빼는지는
+            // 아직 모른다). 그때마다 "모름"으로 덮으면 방향 표시가 깜빡이므로 직전 값을 유지하고,
+            // [HEADING_HOLD_NANOS]보다 오래되면 그때 모름으로 바꾼다.
+            val heading: Timed<Int?> = when {
+                l.hasHeading() -> Timed<Int?>(l.heading, t)
+                last?.value != null && t - last.receivedAtNanos < HEADING_HOLD_NANOS -> last
+                else -> Timed(null, t)
+            }
+            if (!l.hasHeading()) logMissingHeading(l, last, t)
+            s = s.copy(headingDegrees = heading)
         }
         if (data.hasClosuresState()) {
             val c = data.closuresState
@@ -157,7 +168,23 @@ class TeslaBleDataSource : VehicleDataSource {
         return s
     }
 
+    /** 원인 확인용: heading이 빠진 위치 응답의 나머지 GPS 필드와 직전 방향. */
+    private fun logMissingHeading(l: Vehicle.LocationState, last: Timed<Int?>?, t: Long) {
+        val age = last?.let { "%.1fs".format((t - it.receivedAtNanos) / 1e9) } ?: "-"
+        Log.i(
+            TAG,
+            "location without heading: last=${last?.value} ($age ago), " +
+                "geo_heading=${if (l.hasGeoHeading()) l.geoHeading else "-"}, " +
+                "gps_as_of=${if (l.hasGpsAsOf()) l.gpsAsOf else "-"}, " +
+                "estimated_gps_valid=${if (l.hasEstimatedGpsValid()) l.estimatedGpsValid else "-"}",
+        )
+    }
+
     private companion object {
+        const val TAG = "NNTesla.Data"
+
+        /** heading이 빠진 응답이 와도 직전 방향을 유지하는 시간. 위치는 약 2.5초마다 요청한다. */
+        const val HEADING_HOLD_NANOS = 10_000_000_000L
         const val KM_PER_MILE = 1.609344f
         const val KPA_PER_BAR = 100f
     }

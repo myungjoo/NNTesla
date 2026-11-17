@@ -394,6 +394,10 @@ Field 12 is reserved.
 | 119 | `estimated_gps_valid` | bool | Estimated fix valid | - |
 | 120 | `estimated_to_raw_distance` | float | Metres (stated in a comment) | - |
 
+실차에서 위치 응답이 `heading`을 빼고 올 때가 있다(주행 중 방향 표시가 `-`로 깜빡였다). 0°(정북)를 생략하는지,
+GPS 상태에 따라 빼는지는 아직 모른다. 앱은 직전 방향을 10초까지 유지하고, 빠질 때마다 logcat
+`NNTesla.Data`에 직전 값과 `geo_heading`·`gps_as_of`·`estimated_gps_valid`를 남긴다.
+
 ### 2.8 `TirePressureState`
 
 The proto comment says "tpms pressure values in bar" and "rcp values in bar".

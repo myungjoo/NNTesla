@@ -75,4 +75,48 @@ class TeslaBleDataSourceTest {
         assertNull("empty title is treated as missing", m.title)
         assertEquals("Spotify", m.source)
     }
+
+    private fun location(heading: Int?): Vehicle.VehicleData {
+        val l = Vehicle.LocationState.newBuilder()
+        if (heading != null) l.setHeading(heading)
+        return Vehicle.VehicleData.newBuilder().setLocationState(l).build()
+    }
+
+    /** 회귀: 차량이 heading을 빼고 보낸 응답마다 방향이 "-"로 깜빡였다. */
+    @Test
+    fun missingHeadingKeepsLastValue() {
+        val source = TeslaBleDataSource()
+        source.publish(location(90), receivedAtNanos = 0L)
+        source.publish(location(null), receivedAtNanos = 2_500_000_000L)
+        assertEquals(90, source.slow.value.headingDegrees!!.value)
+        source.publish(location(null), receivedAtNanos = 5_000_000_000L)
+        assertEquals(90, source.slow.value.headingDegrees!!.value)
+        source.publish(location(95), receivedAtNanos = 7_500_000_000L)
+        assertEquals(95, source.slow.value.headingDegrees!!.value)
+    }
+
+    @Test
+    fun headingBecomesUnknownAfterHoldTime() {
+        val source = TeslaBleDataSource()
+        source.publish(location(90), receivedAtNanos = 0L)
+        // 직전 값의 시각 기준이라, heading 없는 응답이 이어져도 10초가 지나면 모름으로 바뀐다.
+        source.publish(location(null), receivedAtNanos = 7_500_000_000L)
+        assertEquals(90, source.slow.value.headingDegrees!!.value)
+        source.publish(location(null), receivedAtNanos = 10_000_000_000L)
+        assertNull(source.slow.value.headingDegrees!!.value)
+    }
+
+    @Test
+    fun missingHeadingWithoutHistoryIsUnknown() {
+        val source = TeslaBleDataSource()
+        source.publish(location(null), receivedAtNanos = 0L)
+        assertNull(source.slow.value.headingDegrees!!.value)
+    }
+
+    @Test
+    fun northIsAValidHeading() {
+        val source = TeslaBleDataSource()
+        source.publish(location(0), receivedAtNanos = 0L)
+        assertEquals(0, source.slow.value.headingDegrees!!.value)
+    }
 }
