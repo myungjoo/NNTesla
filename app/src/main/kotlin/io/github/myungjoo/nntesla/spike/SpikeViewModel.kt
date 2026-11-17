@@ -60,12 +60,44 @@ class SpikeViewModel(app: Application) : AndroidViewModel(app) {
     val fast: StateFlow<FastState?> = dataSource.fast
     val slow: StateFlow<SlowState> = dataSource.slow
 
-    // 메인 스레드에서 바꾸고 BLE 스레드의 리스너에서 읽는다.
-    @Volatile
-    private var client: TeslaVehicleClient? = null
-    private var scheduler: PollingScheduler? = null
-    private var runConfig: PollingScheduler.Config? = null
     private var reportJob: Job? = null
+
+    private val runner = PollingRunner(object : PollingRunner.Listener<TeslaVehicleClient> {
+        override fun startScheduler(client: TeslaVehicleClient, config: PollingScheduler.Config): PollingRunner.Handle {
+            val s = PollingScheduler(client, config) { kind, result ->
+                // BLE thread: publish first, then record, so recording never delays the UI.
+                val ok = result.outcome as? TeslaVehicleClient.Outcome.Ok
+                val fastState = ok?.let { dataSource.publish(it.data, result.decodedNanos) }
+                recorder.record(kind, result, if (kind == PollingScheduler.Kind.FAST) fastState else null)
+            }
+            s.start()
+            return PollingRunner.Handle { s.stop() }
+        }
+
+        override fun onRunStarted() {
+            recorder.reset()
+            _running.value = true
+            reportJob = viewModelScope.launch(Dispatchers.Default) {
+                while (isActive) {
+                    _report.value = recorder.snapshot()
+                    delay(500)
+                }
+            }
+        }
+
+        override fun onRunStopped() {
+            reportJob?.cancel()
+            reportJob = null
+            _report.value = recorder.snapshot()
+            _running.value = false
+        }
+
+        override fun onGap() = recorder.markGap()
+
+        override fun isReady() = _status.value.first == TeslaVehicleClient.State.READY
+    })
+
+    private val client: TeslaVehicleClient? get() = runner.client
 
     init {
         // Auto-connect: a VIN from a previous session plus granted permissions is all we need.
@@ -97,45 +129,26 @@ class SpikeViewModel(app: Application) : AndroidViewModel(app) {
         }
         _message.value = ""
         // 이전 클라이언트에 묶인 스케줄러를 먼저 멈춘다. 측정 중이면 새 클라이언트가 READY가 될 때 다시 시작한다.
-        if (scheduler != null) {
-            scheduler?.stop()
-            scheduler = null
-            recorder.markGap()
-        }
+        runner.pause()
         client?.shutdown()
         lateinit var created: TeslaVehicleClient
         created = TeslaVehicleClient(getApplication(), v, key, object : TeslaVehicleClient.Listener {
             override fun onStateChanged(state: TeslaVehicleClient.State, detail: String) {
                 // 교체되거나 끊긴 클라이언트가 늦게 보내는 이벤트(예: shutdown 후 "stopped")는 무시한다.
-                if (client !== created) return
+                if (!runner.isCurrent(created)) return
                 _status.value = state to detail
-                viewModelScope.launch(Dispatchers.Main) { if (client === created) onClientState(state) }
+                // 계기판이므로 연결되면 바로 값을 받기 시작한다(PollingRunner 참고).
+                viewModelScope.launch(Dispatchers.Main) { runner.onState(created, state) }
             }
         })
-        client = created
+        runner.setClient(created)
         created.start(autoReconnect = true)
-    }
-
-    /** Main thread. Pauses polling while the link is down and resumes it once READY again. */
-    private fun onClientState(state: TeslaVehicleClient.State) {
-        if (state == TeslaVehicleClient.State.READY) {
-            // 계기판이므로 연결되면 바로 값을 받기 시작한다. 측정 설정을 바꾸려면 설정 화면에서 Stop 후 다시 Start.
-            if (!_running.value) {
-                startRun(PollingScheduler.Config())
-            } else if (scheduler == null) {
-                startScheduler()
-            }
-        } else if (scheduler != null) {
-            scheduler?.stop()
-            scheduler = null
-            recorder.markGap()
-        }
     }
 
     fun disconnect() {
         stopRun()
         client?.shutdown()
-        client = null
+        runner.setClient(null)
         _status.value = TeslaVehicleClient.State.IDLE to "disconnected (auto-connect off until Connect)"
     }
 
@@ -149,41 +162,10 @@ class SpikeViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Starts a measurement run. If the link drops, the run pauses and resumes on reconnect. */
     fun startRun(config: PollingScheduler.Config) {
-        if (_running.value) return
-        recorder.reset()
-        runConfig = config
-        _running.value = true
-        if (_status.value.first == TeslaVehicleClient.State.READY) startScheduler()
-        reportJob = viewModelScope.launch(Dispatchers.Default) {
-            while (isActive) {
-                _report.value = recorder.snapshot()
-                delay(500)
-            }
-        }
+        runner.startRun(config)
     }
 
-    private fun startScheduler() {
-        val c = client ?: return
-        val config = runConfig ?: return
-        val s = PollingScheduler(c, config) { kind, result ->
-            // BLE thread: publish first, then record, so recording never delays the UI.
-            val ok = result.outcome as? TeslaVehicleClient.Outcome.Ok
-            val fastState = ok?.let { dataSource.publish(it.data, result.decodedNanos) }
-            recorder.record(kind, result, if (kind == PollingScheduler.Kind.FAST) fastState else null)
-        }
-        scheduler = s
-        s.start()
-    }
-
-    fun stopRun() {
-        scheduler?.stop()
-        scheduler = null
-        runConfig = null
-        reportJob?.cancel()
-        reportJob = null
-        if (_running.value) _report.value = recorder.snapshot()
-        _running.value = false
-    }
+    fun stopRun() = runner.stopRun()
 
     /** Called from the speed text's draw pass. */
     fun onSpeedDrawn(sampleReceivedAtNanos: Long) {
