@@ -5,6 +5,7 @@ import android.app.Application
 import android.content.pm.PackageManager
 import android.content.Context
 import android.hardware.display.DisplayManager
+import android.util.Log
 import android.view.Display
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
@@ -67,10 +68,12 @@ class SpikeViewModel(app: Application) : AndroidViewModel(app) {
             val s = PollingScheduler(client, config) { kind, result ->
                 // BLE thread: publish first, then record, so recording never delays the UI.
                 val ok = result.outcome as? TeslaVehicleClient.Outcome.Ok
+                if (ok != null) runnerOnData() else lastFailure = result.outcome.describe()
                 val fastState = ok?.let { dataSource.publish(it.data, result.decodedNanos) }
                 recorder.record(kind, result, if (kind == PollingScheduler.Kind.FAST) fastState else null)
             }
             s.start()
+            Log.i(TAG, "polling started")
             return PollingRunner.Handle { s.stop() }
         }
 
@@ -92,16 +95,42 @@ class SpikeViewModel(app: Application) : AndroidViewModel(app) {
             _running.value = false
         }
 
-        override fun onGap() = recorder.markGap()
+        override fun onGap() {
+            Log.i(TAG, "polling paused")
+            recorder.markGap()
+        }
 
         override fun isReady() = _status.value.first == TeslaVehicleClient.State.READY
     })
 
     private val client: TeslaVehicleClient? get() = runner.client
 
+    /** 마지막 요청 실패 이유. 값이 끊겨 복구할 때 로그에 남긴다(BLE 스레드에서 쓴다). */
+    @Volatile
+    private var lastFailure = "-"
+
+    private fun runnerOnData() {
+        runner.onData()
+    }
+
     init {
         // Auto-connect: a VIN from a previous session plus granted permissions is all we need.
         autoConnectIfPossible()
+        // 끊겼다가 다시 연결됐는데 값이 들어오지 않으면 스스로 복구한다(PollingRunner.checkStall).
+        viewModelScope.launch {
+            while (isActive) {
+                delay(STALL_CHECK_MS)
+                when (runner.checkStall()) {
+                    PollingRunner.Recovery.RESTART_SCHEDULER ->
+                        Log.w(TAG, "no data while connected (last failure: $lastFailure) - polling restarted")
+                    PollingRunner.Recovery.RECONNECT -> {
+                        Log.w(TAG, "still no data (last failure: $lastFailure) - reconnecting")
+                        if (client != null) connect()
+                    }
+                    PollingRunner.Recovery.NONE -> Unit
+                }
+            }
+        }
     }
 
     fun setVin(value: String) {
@@ -188,6 +217,15 @@ class SpikeViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     companion object {
+        private const val TAG = "NNTesla.Poll"
+        private const val STALL_CHECK_MS = 1_000L
+
+        private fun TeslaVehicleClient.Outcome.describe(): String = when (this) {
+            is TeslaVehicleClient.Outcome.Failed -> reason
+            TeslaVehicleClient.Outcome.Timeout -> "timeout"
+            is TeslaVehicleClient.Outcome.Ok -> "ok"
+        }
+
         /** 차량 스캔·연결에 필요한 런타임 권한. 위치 권한이 필요한 이유는 tesla-ble 매니페스트 참고. */
         val REQUIRED_PERMISSIONS = arrayOf(
             Manifest.permission.BLUETOOTH_SCAN,

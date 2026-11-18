@@ -131,3 +131,6 @@ CSV.
 - **Link drops during a run:** polling pauses and resumes after reconnecting. Each drop is
   counted as `link drops` and is excluded from the latency bound (the first sample after a
   reconnect starts a new baseline), so judge outages from that counter.
+- **연결됐는데 값이 오지 않을 때:** `READY`인데 4초 동안 응답이 하나도 성공하지 않으면 폴링을 새로 시작하고,
+  8초가 지나도 그대로면 클라이언트를 새로 만들어 다시 연결한다(앱 재시작과 같은 효과). 각 단계는 logcat
+  `NNTesla.Poll`에 마지막 실패 이유와 함께 남고 `link drops`에도 더해진다.

@@ -44,7 +44,7 @@ internal class BleLink(
     private var mtu = DEFAULT_MTU
     private val writeQueue = ArrayDeque<Chunk>()
     private var writeInFlight: Chunk? = null
-    private val reassembler = BleReassembler()
+    private var reassembler = BleReassembler()
     private var firstChunkNanos = 0L
     private var ready = false
 
@@ -83,6 +83,13 @@ internal class BleLink(
         subscribeStarted = false
         writeQueue.clear()
         writeInFlight = null
+        // 자동 재연결은 같은 BleLink를 다시 쓴다. 이전 링크의 MTU·특성·받다 만 메시지가 남으면 안 된다.
+        mtu = DEFAULT_MTU
+        blockLength = DEFAULT_MTU - ATT_HEADER
+        tx = null
+        rx = null
+        reassembler = BleReassembler()
+        firstChunkNanos = 0L
         g.disconnect()
         g.close()
     }
@@ -127,24 +134,28 @@ internal class BleLink(
         }
     }
 
+    // 콜백 객체는 재연결 뒤에도 같다. 닫은 이전 GATT가 늦게 보내는 콜백(예: 끊김 알림)이 새 링크를
+    // 닫거나 섞이지 않도록 지금 GATT의 콜백만 처리한다.
     private val callback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
+            if (g !== gatt) return
             if (newState == BluetoothProfile.STATE_CONNECTED && status == BluetoothGatt.GATT_SUCCESS) {
                 g.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH)
                 if (!g.requestMtu(MAX_MTU)) startDiscovery(g)
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED || status != BluetoothGatt.GATT_SUCCESS) {
-                if (gatt != null) fail("disconnected (status=$status)")
+                fail("disconnected (status=$status)")
             }
         }
 
         override fun onMtuChanged(g: BluetoothGatt, newMtu: Int, status: Int) {
+            if (g !== gatt) return
             if (status == BluetoothGatt.GATT_SUCCESS) mtu = newMtu
             blockLength = minOf(mtu, MAX_MESSAGE_CHUNK) - ATT_HEADER
             startDiscovery(g)
         }
 
         override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
-            if (subscribeStarted || gatt == null) return
+            if (subscribeStarted || g !== gatt) return
             subscribeStarted = true
             val service = g.getService(UUID.fromString(BleFraming.SERVICE_UUID))
             tx = service?.getCharacteristic(UUID.fromString(BleFraming.TO_VEHICLE_UUID))
@@ -177,7 +188,7 @@ internal class BleLink(
         }
 
         override fun onDescriptorWrite(g: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
-            if (ready || gatt == null) return
+            if (ready || g !== gatt) return
             if (status != BluetoothGatt.GATT_SUCCESS) {
                 fail("RX subscription failed (status=$status)")
                 return
@@ -187,6 +198,7 @@ internal class BleLink(
         }
 
         override fun onCharacteristicWrite(g: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
+            if (g !== gatt) return
             val chunk = writeInFlight ?: return
             writeInFlight = null
             if (status != BluetoothGatt.GATT_SUCCESS) {
@@ -198,12 +210,12 @@ internal class BleLink(
         }
 
         override fun onCharacteristicChanged(g: BluetoothGatt, characteristic: BluetoothGattCharacteristic, value: ByteArray) {
-            onChunk(value)
+            if (g === gatt) onChunk(value)
         }
 
         @Deprecated("Used below API 33")
         override fun onCharacteristicChanged(g: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
-            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            if (g === gatt && Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
                 @Suppress("DEPRECATION")
                 onChunk(characteristic.value ?: return)
             }

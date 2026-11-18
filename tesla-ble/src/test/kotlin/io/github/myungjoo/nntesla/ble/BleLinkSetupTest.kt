@@ -38,12 +38,15 @@ class BleLinkSetupTest {
 
     private val readyCalls = ArrayList<Int>()
     private val closeReasons = ArrayList<String>()
+    private val messages = ArrayList<List<Byte>>()
     private val link = BleLink(mock(Context::class.java), mock(Handler::class.java), object : BleLink.Listener {
         override fun onLinkReady(mtu: Int) {
             readyCalls += mtu
         }
 
-        override fun onLinkMessage(message: ByteArray, firstChunkNanos: Long, completeNanos: Long) = Unit
+        override fun onLinkMessage(message: ByteArray, firstChunkNanos: Long, completeNanos: Long) {
+            messages += message.toList()
+        }
 
         override fun onLinkClosed(reason: String) {
             closeReasons += reason
@@ -64,6 +67,19 @@ class BleLinkSetupTest {
     }
 
     private fun connected() = callback.onConnectionStateChange(gatt, BluetoothGatt.GATT_SUCCESS, BluetoothProfile.STATE_CONNECTED)
+
+    private fun setUpLink(mtu: Int) {
+        connected()
+        callback.onMtuChanged(gatt, mtu, BluetoothGatt.GATT_SUCCESS)
+        callback.onServicesDiscovered(gatt, BluetoothGatt.GATT_SUCCESS)
+        callback.onDescriptorWrite(gatt, cccd, BluetoothGatt.GATT_SUCCESS)
+    }
+
+    /** 자동 재연결: 링크를 닫고 같은 BleLink로 다시 연결한다(connect()가 gatt를 다시 잡는다). */
+    private fun reconnect() {
+        link.close()
+        link.setField("gatt", gatt)
+    }
 
     @Test
     fun singleMtuCallbackSetsUpLink() {
@@ -112,5 +128,52 @@ class BleLinkSetupTest {
         callback.onDescriptorWrite(gatt, cccd, 133)
         assertEquals(listOf("RX subscription failed (status=133)"), closeReasons)
         assertEquals(emptyList<Int>(), readyCalls)
+    }
+
+    /**
+     * 회귀(0.2.1-spike, 주행 중 끊긴 뒤 값이 멈춤): 재연결은 같은 BleLink를 다시 쓴다. 이전 링크에서 협상한
+     * MTU가 남으면 새 링크에서 MTU 협상이 안 됐을 때 기본 MTU보다 큰 조각을 보낸다.
+     */
+    @Test
+    fun reconnectStartsFromDefaultMtu() {
+        setUpLink(517)
+        reconnect()
+        `when`(gatt.requestMtu(anyInt())).thenReturn(false)
+        connected()
+        callback.onServicesDiscovered(gatt, BluetoothGatt.GATT_SUCCESS)
+        callback.onDescriptorWrite(gatt, cccd, BluetoothGatt.GATT_SUCCESS)
+        assertEquals(listOf(517, 23), readyCalls)
+        assertEquals(20, link.field("blockLength"))
+    }
+
+    /** 이전 링크에서 받다 만 메시지가 새 링크의 첫 메시지(핸드셰이크 응답)에 섞이면 안 된다. */
+    @Test
+    fun reconnectDropsPartialMessageFromOldLink() {
+        setUpLink(517)
+        callback.onCharacteristicChanged(gatt, rx, byteArrayOf(0, 5, 1, 2)) // 5바이트 중 2바이트만 받고 끊김
+        reconnect()
+        setUpLink(517)
+        callback.onCharacteristicChanged(gatt, rx, byteArrayOf(0, 2, 9, 9))
+        assertEquals(listOf(listOf<Byte>(9, 9)), messages)
+    }
+
+    /** 닫은 이전 GATT가 늦게 보낸 콜백(끊김 알림, 구독 완료)이 새 링크를 닫거나 준비시키면 안 된다. */
+    @Test
+    fun callbacksFromOldGattAreIgnored() {
+        val old = mock(BluetoothGatt::class.java)
+        callback.onConnectionStateChange(old, 8, BluetoothProfile.STATE_DISCONNECTED)
+        callback.onDescriptorWrite(old, cccd, BluetoothGatt.GATT_SUCCESS)
+        callback.onCharacteristicChanged(old, rx, byteArrayOf(0, 1, 7))
+        assertEquals(emptyList<String>(), closeReasons)
+        assertEquals(emptyList<Int>(), readyCalls)
+        assertEquals(emptyList<List<Byte>>(), messages)
+
+        setUpLink(517)
+        callback.onConnectionStateChange(old, 8, BluetoothProfile.STATE_DISCONNECTED)
+        assertTrue("current link stays up", link.isReady)
+        assertEquals(emptyList<String>(), closeReasons)
+
+        callback.onConnectionStateChange(gatt, 8, BluetoothProfile.STATE_DISCONNECTED)
+        assertEquals(listOf("disconnected (status=8)"), closeReasons)
     }
 }
