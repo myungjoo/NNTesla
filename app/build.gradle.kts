@@ -12,8 +12,8 @@ android {
         applicationId = "io.github.myungjoo.nntesla"
         minSdk = 31
         targetSdk = 34
-        versionCode = 3
-        versionName = "0.2.1-spike"
+        versionCode = 4
+        versionName = "0.2.2-spike"
     }
 
     buildTypes {
